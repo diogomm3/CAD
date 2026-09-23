@@ -1,6 +1,6 @@
 # FormFinder
 
-A local React and FastAPI app for searching model listings on Printables, MakerWorld, Thingiverse, and GrabCAD Community, then collecting selected designs under `Projects/` with source attribution and per-file metadata. The application is fully functional when at least one configured source is accessible. Source availability depends on the access method permitted by each website.
+A local React and FastAPI app for searching model listings on Printables, MakerWorld, and GrabCAD Community, then collecting selected designs under `Projects/` with source attribution and per-file metadata. The application is fully functional when at least one configured source is accessible. Source availability depends on the access method permitted by each website.
 
 ## Architecture
 
@@ -51,9 +51,8 @@ Playwright setup has three parts:
 
 Check the browser with `.venv/bin/python -m app.tools.test_browser`. This opens `example.com` and verifies navigation, JavaScript evaluation, title, and DOM text. Other settings include `HTTP_TIMEOUT_SECONDS`, `SOURCE_SEARCH_TIMEOUT_SECONDS`, `REQUEST_DELAY_MS`, `MAX_CONCURRENT_SITES`, `MAX_CONCURRENT_DOWNLOADS`, `MAX_FILE_SIZE_MB`, `LOG_LEVEL`, `CORS_ORIGINS`, `PLAYWRIGHT_ENABLED`, `BROWSER_PROFILE_DIR`, `BROWSER_AUTH_ENABLED`, and `DEBUG_SCRAPERS`.
 
-Each source has an enable flag and access mode: `PRINTABLES_ENABLED` / `PRINTABLES_ACCESS_MODE`, `MAKERWORLD_ENABLED` / `MAKERWORLD_ACCESS_MODE`, `THINGIVERSE_ENABLED` / `THINGIVERSE_ACCESS_MODE`, and `GRABCAD_ENABLED` / `GRABCAD_ACCESS_MODE`. Modes are `auto`, `http`, `browser`, `authenticated_browser`, `api`, and `disabled`. `auto` tries normal HTTP, public Playwright, and then the persistent authenticated browser when `BROWSER_AUTH_ENABLED=true`. Thingiverse defaults to its documented API mode. Unsupported combinations report `unsupported`.
+Each source has an enable flag and access mode: `PRINTABLES_ENABLED` / `PRINTABLES_ACCESS_MODE`, `MAKERWORLD_ENABLED` / `MAKERWORLD_ACCESS_MODE`, and `GRABCAD_ENABLED` / `GRABCAD_ACCESS_MODE`. Modes are `auto`, `http`, `browser`, `authenticated_browser`, `api`, and `disabled`. `auto` tries normal HTTP, public Playwright, and then the persistent authenticated browser when `BROWSER_AUTH_ENABLED=true`. Unsupported combinations report `unsupported`.
 
-Thingiverse's [official developer API](https://www.thingiverse.com/developers/swagger) requires an application token. Set `THINGIVERSE_API_KEY` in `backend/.env`; without it, the adapter reports `api_key_required` rather than an empty result. Do not put credentials in source code.
 
 ### Optional authenticated browser profile
 
@@ -63,13 +62,13 @@ Public browser rendering uses a clean shared browser context. To test normal use
 .venv/bin/python -m app.tools.browser_login grabcad
 ```
 
-Log into the site yourself in the opened browser, then stop the command with Ctrl+C. Commands are also available for `printables` and `makerworld`. Set `BROWSER_AUTH_ENABLED=true` to allow an authenticated browser attempt after public access fails. The profile stores browser session data, not usernames or passwords. Keep `browser-profile/` private; it is excluded from Git.
+Log into the site yourself in the opened browser, then stop the command with Ctrl+C. Commands are also available for `makerworld`. Set `BROWSER_AUTH_ENABLED=true` to allow an authenticated browser attempt after public access fails. The profile stores browser session data, not usernames or passwords. Keep `browser-profile/` private; it is excluded from Git.
 
 In the UI, **Import a model directly** accepts a public model page URL and uses the same adapter detail and download methods as search. The matching source must be enabled and its normal configured access method must be permitted; the import does not bypass sign-in, CAPTCHA, or other access controls.
 
 ### Adapter diagnostics and live checks
 
-`GET /api/sources/status` reports each adapter's last observed state and access method. Search states distinguish `success_empty`, `blocked`, `authentication_required`, `api_key_required`, `rate_limited`, `parse_error`, `network_error`, `timeout`, and `unsupported`. It includes per-stage HTTP/public-browser/authenticated-browser diagnostics. Retry one source with `POST /api/search/source` and `{ "query": "thor hammer", "source": "grabcad" }`.
+`GET /api/sources/status` reports each adapter's last observed state and access method. Search states distinguish `success_empty`, `blocked`, `authentication_required`, `rate_limited`, `parse_error`, `network_error`, `timeout`, and `unsupported`. It includes per-stage HTTP/public-browser/authenticated-browser diagnostics. Retry one source with `POST /api/search/source` and `{ "query": "thor hammer", "source": "grabcad" }`.
 
 Fixture-based parsing tests run with `cd backend && .venv/bin/pytest -q`; they do not contact model sites. After changing adapters, run the live read-only smoke check with `cd backend && .venv/bin/python ../scripts/smoke_test_sources.py "thor hammer"`. For one source use `.venv/bin/python -m app.tools.test_source printables "thor hammer"`. To verify the entire live adapter chain, including a temporary test download, file validation, size, and SHA-256, run `.venv/bin/python -m app.tools.test_source_complete printables "thor hammer"`. A search-only pass is not an end-to-end pass. To inspect a model use `.venv/bin/python -m app.tools.test_model printables MODEL_ID`. The separate `app.tools.download_model` command downloads files and should only be used for a model whose license and download permission allow it.
 
@@ -77,20 +76,19 @@ Run `.venv/bin/python -m app.tools.browser_diagnostic "https://example.com"` to 
 
 ### Current live adapter check
 
-The browser smoke test passed: Chromium launched, navigated to `example.com`, and read its title and DOM. The current public and persistent-profile GrabCAD browser requests returned HTTP 403 from CloudFront with no links or result markup. Current HTTP-only GrabCAD search returns HTTP 200 but only a JavaScript-required shell and no library result links. Printables returned HTTP 403 over HTTP and public Playwright. MakerWorld HTTP access returned 403 in the earlier source check. Thingiverse requires an API key. Browser operation and site access are separate checks; a passing browser test does not imply that a site allows automated access.
+The browser smoke test passed: Chromium launched, navigated to `example.com`, and read its title and DOM. The current public and persistent-profile GrabCAD browser requests returned HTTP 403 from CloudFront with no links or result markup. Current HTTP-only GrabCAD search returns HTTP 200 but only a JavaScript-required shell and no library result links. Printables returned HTTP 403 over HTTP and public Playwright. MakerWorld HTTP access returned 403 in the earlier source check. Browser operation and site access are separate checks; a passing browser test does not imply that a site allows automated access.
 
 | Source | Search | Details | Files | Live verified |
 |---|---|---|---|---|
 | Printables | HTTP and public browser blocked (403) | not checked | not checked | no |
 | MakerWorld | blocked (403) | not checked | not checked | no |
-| Thingiverse | API key required | not checked | not checked | no |
 | GrabCAD | HTTP 200 JavaScript shell; public and authenticated browser 403 | not checked | not checked | no |
 
-The latest end-to-end command attempt in this environment received HTTP 403 from Printables at search through the public browser fallback. The persistent GrabCAD profile also received HTTP 403. No source is marked verified until search, model detail retrieval, file discovery, and a validated download all pass. Thingiverse remains untested live because `THINGIVERSE_API_KEY` is not configured.
+The latest end-to-end command attempt in this environment received HTTP 403 from Printables at search through the public browser fallback. The persistent GrabCAD profile also received HTTP 403. No source is marked verified until search, model detail retrieval, file discovery, and a validated download all pass.
 
 ## Supported websites and scraping
 
-Printables, MakerWorld, and GrabCAD try a normal public HTML request, then a shared Playwright browser for public rendered pages. Thingiverse uses its official documented API. One source failure does not interrupt others. Sites may change their markup or block automated access; those conditions appear as a typed source status and error, separate from a successful empty search. Detail page parsing discovers linked files by extension. Downloads are accepted only over HTTPS on adapter-approved source/CDN domains. Authentication, CAPTCHA, access controls, and anti-bot challenges are not bypassed. Results and downloads must follow the site's terms, license, and rate limits.
+Printables, MakerWorld, and GrabCAD try a normal public HTML request, then a shared Playwright browser for public rendered pages. One source failure does not interrupt others. Sites may change their markup or block automated access; those conditions appear as a typed source status and error, separate from a successful empty search. Detail page parsing discovers linked files by extension. Downloads are accepted only over HTTPS on adapter-approved source/CDN domains. Authentication, CAPTCHA, access controls, and anti-bot challenges are not bypassed. Results and downloads must follow the site's terms, license, and rate limits.
 
 Search returns up to 10 per source in the order supplied by that source's search/API. Counts are not fabricated. Metrics that aren't reliably parsed are null. Download discovery is intentionally conservative: an unrecognized CDN is reported as unavailable until that host is explicitly validated in the source adapter.
 
@@ -109,7 +107,7 @@ This is a local MVP. Public site HTML is not a stable API; result titles, author
 - Check backend logs and `GET /api/health` if the UI cannot search.
 - Check `CORS_ORIGINS` if using a frontend URL other than `localhost:5173`.
 - A `blocked` status reports a rejected access method and its HTTP result; it does not mean the source is impossible. Try a public URL import, or configure the documented API / normal authenticated browser method where available. Never automate or bypass security challenges.
-- `api_key_required` means Thingiverse needs `THINGIVERSE_API_KEY`; `authentication_required` means the website requires a normal user session.
+- `authentication_required` means the website requires a normal user session.
 - `success_empty` is only returned when the source successfully indicates that there are no matching results. A page with unrecognized markup reports `parse_error`.
 - Inspect `metadata.json` for per-file failures and attribution.
 - Keep `Projects/` out of version control; `.gitignore` excludes it.
