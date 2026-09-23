@@ -1,7 +1,6 @@
-import json
 from pathlib import Path
 import pytest
-from app.scrapers.adapters import PrintablesSource, MakerWorldSource, GrabCADSource, ThingiverseSource
+from app.scrapers.adapters import PrintablesSource, MakerWorldSource, GrabCADSource
 from app.scrapers.base import canonical_url
 from app.scrapers.errors import SourceError
 from app.config import SOURCE_CONFIG
@@ -41,31 +40,6 @@ def test_html_model_fixtures_parse_all_supported_files(adapter,source,expected):
     assert not any(file.extension in {".gcode",".bgcode"} for file in model.available_files)
 
 @pytest.mark.asyncio
-async def test_thingiverse_api_fixture_normalizes_search_and_files(monkeypatch):
-    adapter=ThingiverseSource()
-    search=json.loads(read("thingiverse","search.json"))
-    detail=json.loads(read("thingiverse","model.json"))
-    async def fake_api(path,params=None):return search if path.startswith("/search/") else detail
-    monkeypatch.setattr(adapter,"_api_json",fake_api)
-    monkeypatch.setattr("app.config.THINGIVERSE_API_KEY","fixture-token")
-    models=await adapter.search("thor hammer",10)
-    assert len(models)==1
-    model=models[0]
-    assert model.title=="Community Mjolnir" and model.author=="MakerBotUser"
-    assert model.model_url=="https://www.thingiverse.com/thing:404"
-    assert model.thumbnail_url and model.downloads==4200 and model.likes==180
-    files=await adapter.get_downloads(model)
-    assert [(f.name,f.category) for f in files]==[("hammer.stl","STL"),("editable.scad","SOURCE")]
-
-@pytest.mark.asyncio
-async def test_thingiverse_without_token_explicitly_requires_api_key(monkeypatch):
-    monkeypatch.setattr("app.config.THINGIVERSE_API_KEY","")
-    with pytest.raises(SourceError) as error:
-        await ThingiverseSource().search("thor hammer")
-    assert error.value.status=="api_key_required"
-    assert error.value.code=="API_KEY_REQUIRED"
-
-@pytest.mark.asyncio
 async def test_http_403_remains_blocked_when_browser_runtime_is_missing(monkeypatch):
     adapter=PrintablesSource()
     async def denied(url):raise SourceError("HTTP_403","Source returned HTTP 403.","http")
@@ -77,7 +51,7 @@ async def test_http_403_remains_blocked_when_browser_runtime_is_missing(monkeypa
     assert error.value.code=="HTTP_403"
 
 def test_canonical_url_removes_tracking_and_keeps_identity_query():
-    assert canonical_url("/thing:42?variant=3&utm_source=mail","https://www.thingiverse.com/search") == "https://www.thingiverse.com/thing:42?variant=3"
+    assert canonical_url("/model/42?variant=3&utm_source=mail","https://www.printables.com/search") == "https://www.printables.com/model/42?variant=3"
 
 def test_html_detail_ignores_gcode_and_preserves_filename():
     source=PrintablesSource()
