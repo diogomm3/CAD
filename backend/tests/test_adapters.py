@@ -4,6 +4,7 @@ import pytest
 from app.scrapers.adapters import PrintablesSource, MakerWorldSource, GrabCADSource, ThingiverseSource
 from app.scrapers.base import canonical_url
 from app.scrapers.errors import SourceError
+from app.config import SOURCE_CONFIG
 
 FIXTURES=Path(__file__).parent/"fixtures"
 def read(source,name):return (FIXTURES/source/name).read_text(encoding="utf-8")
@@ -57,12 +58,12 @@ async def test_thingiverse_api_fixture_normalizes_search_and_files(monkeypatch):
     assert [(f.name,f.category) for f in files]==[("hammer.stl","STL"),("editable.scad","SOURCE")]
 
 @pytest.mark.asyncio
-async def test_thingiverse_without_token_is_authentication_required(monkeypatch):
+async def test_thingiverse_without_token_explicitly_requires_api_key(monkeypatch):
     monkeypatch.setattr("app.config.THINGIVERSE_API_KEY","")
     with pytest.raises(SourceError) as error:
         await ThingiverseSource().search("thor hammer")
-    assert error.value.status=="authentication_required"
-    assert error.value.code=="AUTH_REQUIRED"
+    assert error.value.status=="api_key_required"
+    assert error.value.code=="API_KEY_REQUIRED"
 
 @pytest.mark.asyncio
 async def test_http_403_remains_blocked_when_browser_runtime_is_missing(monkeypatch):
@@ -83,3 +84,21 @@ def test_html_detail_ignores_gcode_and_preserves_filename():
     detail=source.parse_detail('<html><head><meta property="og:title" content="Model"></head><body><a href="/files/a.stl">custom-name.stl</a><a href="/files/a.gcode">a.gcode</a></body></html>',"https://www.printables.com/model/1-test")
     assert [f.name for f in detail.available_files]==["a.stl"]
     assert detail.available_files[0].category=="STL"
+
+@pytest.mark.asyncio
+async def test_source_can_be_disabled_without_contacting_website(monkeypatch):
+    monkeypatch.setitem(SOURCE_CONFIG["printables"],"enabled",False)
+    with pytest.raises(SourceError) as error:await PrintablesSource().search("hammer")
+    assert error.value.status=="unsupported"
+    assert error.value.code=="SOURCE_DISABLED"
+
+@pytest.mark.asyncio
+async def test_http_mode_does_not_start_browser(monkeypatch):
+    adapter=PrintablesSource()
+    monkeypatch.setitem(SOURCE_CONFIG["printables"],"access_mode","http")
+    async def html(url):return read("printables","search.html")
+    async def browser(*args,**kwargs):raise AssertionError("browser must not be used in http mode")
+    monkeypatch.setattr(adapter,"_get",html)
+    monkeypatch.setattr(adapter,"_browser_html",browser)
+    result=await adapter.search("hammer")
+    assert len(result)==1
