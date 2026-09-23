@@ -1,6 +1,5 @@
 from .printables import PrintablesSource
 from .makerworld import MakerWorldSource
-from .thingiverse import ThingiverseSource
 from .grabcad import GrabCADSource
 
-SOURCES = {s.key: s for s in (PrintablesSource(), MakerWorldSource(), ThingiverseSource(), GrabCADSource())}
+SOURCES = {s.key: s for s in (PrintablesSource(), MakerWorldSource(), GrabCADSource())}
