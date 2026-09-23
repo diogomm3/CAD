@@ -2,6 +2,9 @@ services:
   backend:
     build: ./backend
     ports: ["8000:8000"]
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       PROJECTS_DIR: /Projects
       CORS_ORIGINS: http://localhost:5173
