@@ -160,7 +160,7 @@ class ModelSource(ABC):
             elif mode == "auto" and PLAYWRIGHT_ENABLED:
                 try:html=await self._browser_html(model_url)
                 except SourceError:
-                    if not (BROWSER_AUTH_ENABLED and self.key!="thingiverse"):raise
+                    if not BROWSER_AUTH_ENABLED:raise
                     html=await self._browser_html(model_url,authenticated=True)
             elif http_error: raise http_error
             else: raise SourceError("UNSUPPORTED", "No enabled access method is available.")
