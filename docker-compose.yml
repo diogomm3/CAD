@@ -5,8 +5,10 @@ services:
     environment:
       PROJECTS_DIR: /Projects
       CORS_ORIGINS: http://localhost:5173
+      BROWSER_PROFILE_DIR: /browser-profile
     volumes:
       - ./Projects:/Projects
+      - ./browser-profile:/browser-profile
   frontend:
     build: ./frontend
     ports: ["5173:5173"]
