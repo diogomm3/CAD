@@ -4,8 +4,11 @@ from urllib.parse import urlparse
 
 EXT_CATEGORIES = {
     ".stl": "STL", ".3mf": "3MF", ".step": "CAD", ".stp": "CAD",
-    ".iges": "CAD", ".igs": "CAD", ".sldprt": "CAD", ".sldasm": "CAD",
+    ".iges": "CAD", ".igs": "CAD", ".step.gz": "CAD",
     ".f3d": "SOURCE", ".scad": "SOURCE", ".blend": "SOURCE", ".fcstd": "SOURCE",
+    ".sldprt": "SOURCE", ".sldasm": "SOURCE", ".slddrw": "SOURCE",
+    ".ipt": "SOURCE", ".iam": "SOURCE", ".prt": "SOURCE", ".asm": "SOURCE",
+    ".catpart": "SOURCE", ".catproduct": "SOURCE", ".3dxml": "SOURCE",
     ".obj": "OTHER", ".dxf": "OTHER", ".zip": "OTHER", ".rar": "OTHER", ".7z": "OTHER",
 }
 
@@ -18,4 +21,3 @@ def category_for(name: str) -> str:
 
 def filename_from_url(url: str, fallback: str = "download") -> str:
     return safe_name(Path(urlparse(url).path).name or fallback, fallback)
-
