@@ -1,0 +1,10 @@
+Projects/
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+.env
+cache/
+.tmp/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
