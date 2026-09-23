@@ -18,14 +18,13 @@ DEBUG_DIR = Path(os.getenv("DEBUG_DIR", str(BACKEND_DIR / "debug"))).resolve()
 BROWSER_PROFILE_DIR = (BACKEND_DIR / os.getenv("BROWSER_PROFILE_DIR", "../browser-profile")).resolve()
 BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() in {"1", "true", "yes"}
 BROWSER_AUTH_ENABLED = os.getenv("BROWSER_AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}
-THINGIVERSE_API_KEY = os.getenv("THINGIVERSE_API_KEY", "").strip()
 MAX_FILE_SIZE_MB = max(1, float(os.getenv("MAX_FILE_SIZE_MB", "1000")))
 
-SOURCE_KEYS = ("printables", "makerworld", "thingiverse", "grabcad")
+SOURCE_KEYS = ("printables", "makerworld", "grabcad")
 SOURCE_CONFIG = {
     key: {
         "enabled": os.getenv(f"{key.upper()}_ENABLED", "true").lower() in {"1", "true", "yes"},
-        "access_mode": os.getenv(f"{key.upper()}_ACCESS_MODE", "api" if key == "thingiverse" else "auto").lower(),
+        "access_mode": os.getenv(f"{key.upper()}_ACCESS_MODE", "auto").lower(),
     }
     for key in SOURCE_KEYS
 }
