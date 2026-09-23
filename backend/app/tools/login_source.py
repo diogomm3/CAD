@@ -12,8 +12,9 @@ async def main():
     context=await BROWSER.context()
     page=await context.new_page()
     await page.goto(URLS[args.source],wait_until="domcontentloaded")
-    print("Log in manually in the browser window. Close it with Ctrl+C after login is complete.")
-    try: await page.wait_for_timeout(60*60*1000)
+    print("Log in manually in the browser window. Close the window or press Ctrl+C when finished.")
+    try:
+        while not page.is_closed():await page.wait_for_timeout(1000)
     except KeyboardInterrupt: pass
     finally: await BROWSER.close()
 
