@@ -19,3 +19,20 @@ BROWSER_PROFILE_DIR = (BACKEND_DIR / os.getenv("BROWSER_PROFILE_DIR", "../browse
 BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() in {"1", "true", "yes"}
 BROWSER_AUTH_ENABLED = os.getenv("BROWSER_AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}
 THINGIVERSE_API_KEY = os.getenv("THINGIVERSE_API_KEY", "").strip()
+MAX_FILE_SIZE_MB = max(1, float(os.getenv("MAX_FILE_SIZE_MB", "1000")))
+
+SOURCE_KEYS = ("printables", "makerworld", "thingiverse", "grabcad")
+SOURCE_CONFIG = {
+    key: {
+        "enabled": os.getenv(f"{key.upper()}_ENABLED", "true").lower() in {"1", "true", "yes"},
+        "access_mode": os.getenv(f"{key.upper()}_ACCESS_MODE", "api" if key == "thingiverse" else "auto").lower(),
+    }
+    for key in SOURCE_KEYS
+}
+VALID_ACCESS_MODES = {"auto", "http", "browser", "authenticated_browser", "api", "disabled"}
+for _source, _config in SOURCE_CONFIG.items():
+    if _config["access_mode"] not in VALID_ACCESS_MODES:
+        _config["access_mode"] = "disabled"
+
+def source_config(key: str) -> dict:
+    return SOURCE_CONFIG[key]
