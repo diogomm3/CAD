@@ -96,7 +96,4 @@ async def test_source_status_diagnostics():
         response=await client.get("/api/sources/status")
     assert response.status_code==200
     sources=response.json()["sources"]
-    assert [source["id"] for source in sources]==["printables","makerworld","thingiverse","grabcad"]
-    assert sources[2]["search_method"]=="api"
-    assert sources[2]["api_key"] in {"configured","not_configured"}
-    assert sources[2]["api_key"] != "fixture-token"
+    assert [source["id"] for source in sources]==["printables","makerworld","grabcad"]
