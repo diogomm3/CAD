@@ -2,7 +2,7 @@ import argparse, asyncio, re
 from ..browser import BROWSER
 from ..browser.diagnostics import inspect_dom, safe_url, safe_text
 
-PATTERN=re.compile(r"/library/|/models?/|/thing:\d+|/model/\d+",re.I)
+PATTERN=re.compile(r"/library/|/models?/|/model/\d+",re.I)
 
 async def run(url: str,authenticated: bool=False):
     page=await BROWSER.new_page(authenticated=authenticated)
