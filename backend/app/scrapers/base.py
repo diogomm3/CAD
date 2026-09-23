@@ -6,7 +6,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ..config import DEBUG_SCRAPERS, DEBUG_DIR, HTTP_TIMEOUT_SECONDS, PLAYWRIGHT_ENABLED, REQUEST_DELAY_MS, BROWSER_AUTH_ENABLED
+from ..config import DEBUG_SCRAPERS, DEBUG_DIR, HTTP_TIMEOUT_SECONDS, PLAYWRIGHT_ENABLED, REQUEST_DELAY_MS, BROWSER_AUTH_ENABLED, MAX_FILE_SIZE_MB, source_config
 from ..models import DownloadableFile, ModelResult
 from ..utils.filenames import category_for
 from .errors import SourceError
@@ -46,6 +46,14 @@ class ModelSource(ABC):
     last_status = "ready"
     last_message: str | None = None
     last_method: str | None = None
+
+    @property
+    def config(self):
+        return source_config(self.key)
+
+    def ensure_enabled(self):
+        if not self.config["enabled"] or self.config["access_mode"] == "disabled":
+            raise SourceError("SOURCE_DISABLED", f"{self.label} is disabled in source configuration.")
 
     async def _respect_rate(self):
         if not hasattr(self,"_request_lock"):self._request_lock=asyncio.Lock();self._last_request_at=0.0
@@ -136,18 +144,39 @@ class ModelSource(ABC):
     async def search(self, query: str, limit: int = 10) -> list[ModelResult]: ...
 
     async def get_model_details(self, model_url: str) -> ModelResult:
+        self.ensure_enabled()
         self.validate_url(model_url)
-        try: html=await self._get(model_url);self.last_method="http"
-        except SourceError as exc:
-            if not PLAYWRIGHT_ENABLED:raise
-            html=await self._browser_html(model_url)
+        mode=self.config["access_mode"]
+        if mode == "api": raise SourceError("UNSUPPORTED", f"{self.label} has no configured API detail adapter.", "api")
+        html=None; http_error=None
+        if mode in {"auto","http"}:
+            try: html=await self._get(model_url);self.last_method="http"
+            except SourceError as exc:
+                http_error=exc
+                if mode == "http": raise
+        if html is None:
+            if mode == "browser" and PLAYWRIGHT_ENABLED: html=await self._browser_html(model_url)
+            elif mode == "authenticated_browser" and PLAYWRIGHT_ENABLED: html=await self._browser_html(model_url,authenticated=True)
+            elif mode == "auto" and PLAYWRIGHT_ENABLED:
+                try:html=await self._browser_html(model_url)
+                except SourceError:
+                    if not (BROWSER_AUTH_ENABLED and self.key!="thingiverse"):raise
+                    html=await self._browser_html(model_url,authenticated=True)
+            elif http_error: raise http_error
+            else: raise SourceError("UNSUPPORTED", "No enabled access method is available.")
         detail=self.parse_detail(html, model_url)
-        if not detail.available_files and PLAYWRIGHT_ENABLED and self.last_method!="playwright":
+        if not detail.available_files and PLAYWRIGHT_ENABLED and (mode=="auto" and self.last_method=="http"):
             try:
-                rendered=await self._browser_html(model_url)
+                rendered=await self._browser_html(model_url,authenticated=False)
                 rendered_detail=self.parse_detail(rendered,model_url)
                 if rendered_detail.available_files:return rendered_detail
             except SourceError as exc:log.info("%s file details browser fallback status=%s",self.label,exc.status)
+        if not detail.available_files and PLAYWRIGHT_ENABLED and ((mode=="auto" and BROWSER_AUTH_ENABLED) or mode=="authenticated_browser"):
+            try:
+                rendered=await self._browser_html(model_url,authenticated=True)
+                rendered_detail=self.parse_detail(rendered,model_url)
+                if rendered_detail.available_files:return rendered_detail
+            except SourceError as exc:log.info("%s authenticated file details fallback status=%s",self.label,exc.status)
         return detail
 
     async def get_downloads(self, model: ModelResult) -> list[DownloadableFile]:
@@ -160,9 +189,20 @@ class ModelSource(ABC):
             headers={"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/134.0 Safari/537.36"}) as client:
             async with client.stream("GET", file.url) as response:
                 response.raise_for_status()
-                if "text/html" in response.headers.get("content-type", ""): raise ValueError("Download URL returned HTML")
+                content_type=response.headers.get("content-type", "").split(";",1)[0].lower()
+                if "text/html" in content_type: raise ValueError("unexpected_content_type: Download URL returned HTML")
+                file.mime_type=content_type or None
+                length=response.headers.get("content-length")
+                if length and int(length)>MAX_FILE_SIZE_MB*1024*1024: raise ValueError("file_too_large")
+                total=0
                 with destination.open("wb") as out:
-                    async for chunk in response.aiter_bytes(): out.write(chunk)
+                    async for chunk in response.aiter_bytes():
+                        total+=len(chunk)
+                        if total>MAX_FILE_SIZE_MB*1024*1024:
+                            destination.unlink(missing_ok=True);raise ValueError("file_too_large")
+                        out.write(chunk)
+                if total==0: raise ValueError("empty_download")
+                file.size_bytes=total
         return destination
 
     def parse_detail(self, html: str, url: str) -> ModelResult:
@@ -191,7 +231,7 @@ class ModelSource(ABC):
             seen.add(href)
             trusted = parsed.scheme == "https" and self._host_allowed(parsed.hostname,self.domains+self.download_domains)
             files.append(DownloadableFile(name=name, extension=ext, category=category_for(name), url=href,
-                downloadable=trusted, reason=None if trusted else "Download host requires adapter validation"))
+                downloadable=trusted, reason=None if trusted else "Download host requires adapter validation",original_name=name,source_url=href))
         missing = {"title":not bool(title),"author":not bool(_author_from_soup(soup)),"thumbnail":not bool(image_url)}
         log.info("%sParser: detail page loaded; files discovered=%d; missing=%s", self.label, len(files), [k for k,v in missing.items() if v])
         counts={category:sum(f.category==category for f in files) for category in sorted({f.category for f in files})}
