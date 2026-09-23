@@ -41,9 +41,10 @@ async def _download(url: str, dest: Path):
                 async for chunk in resp.aiter_bytes(): f.write(chunk)
             return ctype
 
-def _record_file(src: Path, root: Path, category: str, records: list, original: str | None = None):
+def _record_file(src: Path, root: Path, category: str, records: list, original: str | None = None, relative_parent: str = ""):
     bucket = BASE_DIRS.get(category, "OTHER")
-    folder = root / bucket; folder.mkdir(parents=True, exist_ok=True)
+    nested=Path(*(safe_name(part) for part in Path(relative_parent).parts if part not in {".",".."})) if relative_parent else Path()
+    folder = root / bucket / nested; folder.mkdir(parents=True, exist_ok=True)
     data = src.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if any(item.get("sha256") == digest for item in records): return
@@ -51,7 +52,7 @@ def _record_file(src: Path, root: Path, category: str, records: list, original: 
     if dest.exists(): dest = folder / f"{src.stem}_{digest[:8]}{src.suffix}"
     shutil.copy2(src, dest)
     data = dest.read_bytes()
-    records.append({"original_name": original or src.name, "local_path": f"{bucket}/{dest.name}", "category": bucket,
+    records.append({"original_name": original or src.name, "local_path": str(dest.relative_to(root)), "category": bucket,
       "extension": dest.suffix.lower(), "size_bytes": len(data), "sha256": digest, "mime_type": None})
 
 def _extract_zip(path: Path, root: Path, records: list):
@@ -60,26 +61,29 @@ def _extract_zip(path: Path, root: Path, records: list):
             p = PurePosixPath(member.filename)
             if p.is_absolute() or ".." in p.parts or member.is_dir(): continue
             ext = Path(p.name).suffix.lower()
-            if ext in {".zip", ".rar", ".7z"}: continue
+            if ext in {".zip", ".rar", ".7z", ".gcode", ".bgcode"}: continue
             with tempfile.TemporaryDirectory(dir=root.parent) as td:
                 temp = Path(td) / safe_name(p.name)
                 with zf.open(member) as inp, temp.open("wb") as out: shutil.copyfileobj(inp, out)
-                _record_file(temp, root, category_for(p.name), records, p.name)
+                _record_file(temp, root, category_for(p.name), records, p.name, str(Path(*p.parts[:-1])))
 
 async def download_model(model: ModelResult, root: Path, query: str, version: str):
     for folder in ("Image", "STL", "3MF", "CAD", "Source"): (root / folder).mkdir(parents=True, exist_ok=True)
     records, errors = [], []
     try:
-        details = await SOURCES[model.source].get_model_details(model.model_url)
+        source=SOURCES[model.source]
+        details = await source.get_model_details(model.model_url)
+        files = await source.get_downloads(details)
         model = model.model_copy(update={"title": details.title or model.title, "author": details.author or model.author,
             "thumbnail_url": details.thumbnail_url or model.thumbnail_url,
-            "available_files": details.available_files or model.available_files,
+            "available_files": files or details.available_files or model.available_files,
             "description": details.description or model.description, "license": details.license or model.license})
     except Exception as exc:
         log.info("Could not retrieve detail files for %s: %s", model.source, exc)
         errors.append({"file":"model details", "reason":str(exc)[:180]})
     for image_url in ([model.thumbnail_url] if model.thumbnail_url else []):
         try:
+            SOURCES[model.source].validate_download_url(image_url)
             ext = Path(urlparse(image_url).path).suffix.lower()
             if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}: ext = ".jpg"
             temp = root.parent / f"preview-{next(tempfile._get_candidate_names())}{ext}"
@@ -96,7 +100,7 @@ async def download_model(model: ModelResult, root: Path, query: str, version: st
         temp = root.parent / f"asset-{next(tempfile._get_candidate_names())}-{filename_from_url(file.url)}"
         try:
             source = SOURCES[model.source]
-            source.validate_url(file.url)
+            source.validate_download_url(file.url)
             await source.download_file(file, temp)
             if temp.suffix.lower() == ".zip": _extract_zip(temp, root, records)
             else: _record_file(temp, root, file.category or category_for(temp.name), records, file.name)
