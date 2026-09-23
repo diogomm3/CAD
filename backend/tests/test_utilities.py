@@ -24,7 +24,7 @@ def test_zip_extract_skips_path_traversal(tmp_path):
     records = []
     _extract_zip(archive, root, records)
     assert not (tmp_path / "outside.stl").exists()
-    assert (root / "STL" / "hammer.stl").exists()
+    assert (root / "STL" / "parts" / "hammer.stl").exists()
     assert records[0]["category"] == "STL"
     assert len(records[0]["sha256"]) == 64
 
