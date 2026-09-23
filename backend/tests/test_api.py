@@ -20,3 +20,13 @@ async def test_search_returns_each_source_status(monkeypatch):
     assert response.status_code == 200
     assert response.json()["sources"][0]["status"] == "error"
 
+@pytest.mark.asyncio
+async def test_source_status_diagnostics():
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response=await client.get("/api/sources/status")
+    assert response.status_code==200
+    sources=response.json()["sources"]
+    assert [source["id"] for source in sources]==["printables","makerworld","thingiverse","grabcad"]
+    assert sources[2]["search_method"]=="api"
+    assert sources[2]["api_key"] in {"configured","not_configured"}
+    assert sources[2]["api_key"] != "fixture-token"
