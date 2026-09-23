@@ -6,7 +6,7 @@ from .base import ModelSource, canonical_url, _meta, _author_from_soup
 from .errors import SourceError
 from ..models import ModelResult
 from ..utils.filenames import category_for
-from ..config import BROWSER_AUTH_ENABLED
+from ..config import BROWSER_AUTH_ENABLED, PLAYWRIGHT_ENABLED, source_config
 
 log = logging.getLogger(__name__)
 
@@ -68,60 +68,40 @@ class HTMLSearchSource(ModelSource):
         return {key:sum(not getattr(model,key) for model in models) for key in ("model_url","title","author","thumbnail_url")}
 
     async def search(self, query: str, limit: int = 10) -> list[ModelResult]:
-        url=self.search_url.format(query=quote_plus(query)); html=None; http_error=None
-        self.last_attempts={"http":"pending","playwright_public":"pending","playwright_authenticated":"not configured"}
-        try:
-            html=await self._get(url); self.last_method="http"
-            results=self._candidate_models(html,limit)
-            if results:
-                self.last_attempts["http"]=f"success ({len(results)} results)"
-                self.last_status="success";self.last_message=None;return results
-            self.last_attempts["http"]="loaded; no model links parsed"
-            if html:self.save_debug(html,"-http-search.html")
-        except SourceError as exc:
-            http_error=exc;self.last_attempts["http"]=f"{exc.code}: {exc.message}"
-        if self.key=="thingiverse": raise SourceError("PARSE_EMPTY", "Thingiverse public search contained no model cards.", "http")
-        if self.key in {"printables","makerworld","grabcad"}:
+        self.ensure_enabled()
+        mode=source_config(self.key)["access_mode"]
+        if mode == "api": raise SourceError("UNSUPPORTED", f"{self.label} does not provide a configured API adapter.", "api")
+        url=self.search_url.format(query=quote_plus(query)); errors=[]; attempts={}
+        self.last_attempts=attempts
+        methods=("http","playwright_public","playwright_authenticated")
+        allowed={"auto":methods,"http":("http",),"browser":("playwright_public",),"authenticated_browser":("playwright_authenticated",)}.get(mode,())
+        for method in methods:
+            if method not in allowed:
+                attempts[method]="not configured";continue
+            if method!="http" and not PLAYWRIGHT_ENABLED:
+                attempts[method]="Playwright is disabled"
+                if mode!="auto":errors.append(SourceError("UNSUPPORTED","Playwright is disabled.",method))
+                continue
+            if method=="playwright_authenticated" and not (BROWSER_AUTH_ENABLED or mode=="authenticated_browser"):
+                attempts[method]="not configured (set BROWSER_AUTH_ENABLED=true after manual login)";continue
             try:
-                html=await self._browser_html(url,authenticated=False)
+                if method=="http": html=await self._get(url);self.last_method="http"
+                else: html=await self._browser_html(url,authenticated=method=="playwright_authenticated")
                 results=self._candidate_models(html,limit)
                 if results:
-                    self.last_attempts["playwright_public"]=f"success ({len(results)} results)"
-                    self.last_status="success";self.last_message=None;self.last_method="playwright_public";return results
-                self.last_attempts["playwright_public"]="loaded; no model links parsed"
+                    attempts[method]=f"success ({len(results)} results)";self.last_status="success";self.last_message=None
+                    self.last_method=method;return results
+                attempts[method]="loaded; no model links parsed"
                 if re.search(r"no (?:models|results|things) found|no results for",BeautifulSoup(html,"lxml").get_text(" ",strip=True),re.I):
-                    self.last_status="success_empty";self.last_message=None;self.last_method="playwright_public";return []
-                if html: self.save_debug(html,"-search.html")
-                browser_error=SourceError("PARSE_EMPTY", "Page loaded, but no model cards matched the parser.", "playwright_public")
+                    self.last_status="success_empty";self.last_message=None;self.last_method=method;return []
+                if html:self.save_debug(html,f"-{method}-search.html")
+                errors.append(SourceError("PARSE_EMPTY","Page loaded, but no model cards matched the parser.",method))
             except SourceError as exc:
-                browser_error=exc
-                self.last_attempts["playwright_public"]=f"{browser_error.code}: {browser_error.message}"
-            if BROWSER_AUTH_ENABLED and browser_error.code!="BROWSER_UNAVAILABLE" and browser_error.status in {"blocked","authentication_required","network_error"}:
-                try:
-                    html=await self._browser_html(url,authenticated=True)
-                    results=self._candidate_models(html,limit)
-                    if results:
-                        self.last_attempts["playwright_authenticated"]=f"success ({len(results)} results)"
-                        self.last_status="success";self.last_message=None;self.last_method="playwright_authenticated";return results
-                    self.last_attempts["playwright_authenticated"]="loaded; no model links parsed"
-                    if html:self.save_debug(html,"-authenticated-search.html")
-                    browser_error=SourceError("PARSE_EMPTY","Authenticated page loaded but no model links parsed.","playwright_authenticated")
-                except SourceError as exc:
-                    self.last_attempts["playwright_authenticated"]=f"{exc.code}: {exc.message}"
-                    browser_error=exc
-            else:
-                self.last_attempts["playwright_authenticated"]="not configured (set BROWSER_AUTH_ENABLED=true after manual login)"
-            if browser_error.code=="PARSE_EMPTY":
-                if http_error:raise http_error
-                raise browser_error
-            if browser_error.code=="UNSUPPORTED":
-                if http_error:raise http_error
-                raise SourceError("PARSE_EMPTY","Page loaded, but no model cards matched the parser.","http") from browser_error
-            if http_error and browser_error.code=="BROWSER_UNAVAILABLE":raise http_error
-            raise browser_error
-        if http_error: raise http_error
-        if html: self.save_debug(html,"-search.html")
-        raise SourceError("PARSE_EMPTY", "Page loaded, but no model cards matched the parser.", "http")
+                attempts[method]=f"{exc.code}: {exc.message}";errors.append(exc)
+        for error in reversed(errors):
+            if error.status in {"blocked","authentication_required","rate_limited"}: raise error
+        if errors: raise errors[-1]
+        raise SourceError("UNSUPPORTED", "No access method is enabled for this source.")
 
 class PrintablesSource(HTMLSearchSource):
     key="printables";label="Printables";domains=("printables.com",);download_domains=("media.printables.com",);search_method="http+playwright"
@@ -144,7 +124,7 @@ class ThingiverseSource(ModelSource):
 
     def _auth(self):
         from ..config import THINGIVERSE_API_KEY
-        if not THINGIVERSE_API_KEY: raise SourceError("AUTH_REQUIRED","Thingiverse API token is not configured; set THINGIVERSE_API_KEY.","api")
+        if not THINGIVERSE_API_KEY: raise SourceError("API_KEY_REQUIRED","Thingiverse API token is not configured; set THINGIVERSE_API_KEY.","api")
         return {"Authorization":f"Bearer {THINGIVERSE_API_KEY}"}
 
     async def _api_json(self,path,params=None):
@@ -159,6 +139,9 @@ class ThingiverseSource(ModelSource):
         except ValueError as exc:raise SourceError("PARSE_JSON","Thingiverse API returned invalid JSON.","api") from exc
 
     async def search(self,query: str,limit: int=10)->list[ModelResult]:
+        self.ensure_enabled()
+        if source_config(self.key)["access_mode"] not in {"auto","api"}:
+            raise SourceError("UNSUPPORTED","Thingiverse access mode must be api or auto.","api")
         self.last_attempts={"api":"pending"}
         try:data=await self._api_json("/search/"+quote_plus(query),{"type":"things","sort":"popular","per_page":limit})
         except SourceError as exc:
@@ -192,6 +175,9 @@ class ThingiverseSource(ModelSource):
           description=item.get("description"),license=(item.get("license") or {}).get("name") if isinstance(item.get("license"),dict) else item.get("license"),raw_metadata=item)
 
     async def get_model_details(self,model_url: str)->ModelResult:
+        self.ensure_enabled()
+        if source_config(self.key)["access_mode"] not in {"auto","api"}:
+            raise SourceError("UNSUPPORTED","Thingiverse access mode must be api or auto.","api")
         self.validate_url(model_url)
         match=re.search(r"thing:(\d+)",model_url) or re.search(r"/things/(\d+)",model_url)
         if not match:raise ValueError("Could not identify Thingiverse model id")
@@ -211,6 +197,7 @@ class ThingiverseSource(ModelSource):
             from urllib.parse import urlparse as parse_url
             parsed=parse_url(url or "")
             downloadable=bool(url and parsed.scheme=="https" and self._host_allowed(parsed.hostname,self.domains+self.download_domains))
-            files.append({"name":name or f"file-{item.get('id')}{ext}","extension":ext,"category":category_for(name),"url":url,"downloadable":downloadable,"reason":None if downloadable else "download url not provided or host could not be validated"})
+            normalized_name=name or f"file-{item.get('id')}{ext}"
+            files.append({"name":normalized_name,"original_name":normalized_name,"extension":ext,"category":category_for(normalized_name),"url":url,"source_url":url,"downloadable":downloadable,"reason":None if downloadable else "download url not provided or host could not be validated"})
         from ..models import DownloadableFile
         return [DownloadableFile(**f) for f in files]
