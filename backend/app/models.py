@@ -8,6 +8,12 @@ class DownloadableFile(BaseModel):
     url: str | None = None
     downloadable: bool = False
     reason: str | None = None
+    original_name: str | None = None
+    local_path: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    sha256: str | None = None
+    source_url: str | None = None
 
 
 class ModelResult(BaseModel):
@@ -29,4 +35,3 @@ class ModelResult(BaseModel):
     license: str | None = None
     published_at: str | None = None
     raw_metadata: dict | None = None
-
