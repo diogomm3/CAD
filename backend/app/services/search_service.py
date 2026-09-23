@@ -55,19 +55,9 @@ def source_diagnostics():
     output=[]
     for key,source in SOURCES.items():
         status,message=source.last_status,source.last_message
-        if key=="thingiverse":
-            from ..config import THINGIVERSE_API_KEY
-            if not THINGIVERSE_API_KEY and status in {"ready","authentication_required"}:status,message="api_key_required","Set THINGIVERSE_API_KEY to use the documented Thingiverse API."
         config=source_config(key)
         if not config["enabled"] or config["access_mode"]=="disabled":status,message="unsupported",f"{source.label} is disabled."
         item={"id":key,"name":source.label,"enabled":config["enabled"] and config["access_mode"]!="disabled","access_mode":config["access_mode"],"search_method":source.last_method or source.search_method,
             "status":status,"message":message,"last_check":getattr(source,"last_checked_at",None),"diagnostics":_diagnostics(source)}
-        if key=="thingiverse":
-            from ..config import THINGIVERSE_API_KEY
-            item["api_key"]="configured" if THINGIVERSE_API_KEY else "not_configured"
-            if not item["enabled"]:item["api"]=item["search"]="disabled"
-            else:
-                item["api"]="reachable" if source.last_status in {"success","success_empty"} else "unavailable" if source.last_status not in {"ready","authentication_required","api_key_required"} else "not_checked"
-                item["search"]="available" if source.last_status in {"success","success_empty"} else "unavailable" if source.last_status not in {"ready","authentication_required","api_key_required"} else "api_key_required" if not THINGIVERSE_API_KEY else "not_checked"
         output.append(item)
     return output
