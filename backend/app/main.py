@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .config import CORS_ORIGINS, PROJECTS_DIR
+from .config import CORS_ORIGINS
 from .routes import search, projects
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -18,4 +18,4 @@ app.include_router(search.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 
 @app.get("/api/health")
-async def health(): return {"status":"ok","projects_dir":str(PROJECTS_DIR)}
+async def health(): return {"status":"ok"}
