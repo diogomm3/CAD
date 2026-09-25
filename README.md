@@ -64,8 +64,6 @@ Public browser rendering uses a clean shared browser context. To test normal use
 
 Log into the site yourself in the opened browser, then stop the command with Ctrl+C. Set `BROWSER_AUTH_ENABLED=true` to allow an authenticated browser attempt after public access fails. The profile stores browser session data, not usernames or passwords. Keep `browser-profile/` private; it is excluded from Git.
 
-In the UI, **Import a model directly** accepts a public model page URL and uses the same adapter detail and download methods as search. The matching source must be enabled and its normal configured access method must be permitted; the import does not bypass sign-in, CAPTCHA, or other access controls.
-
 ### Adapter diagnostics and live checks
 
 `GET /api/sources/status` reports each adapter's last observed state and access method. Search states distinguish `success_empty`, `blocked`, `authentication_required`, `rate_limited`, `parse_error`, `network_error`, `timeout`, and `unsupported`. It includes per-stage HTTP/public-browser/authenticated-browser diagnostics. Retry one source with `POST /api/search/source` and `{ "query": "thor hammer", "source": "makerworld" }`.
@@ -105,7 +103,7 @@ This is a local MVP. Public site HTML is not a stable API; result titles, author
 
 - Check backend logs and `GET /api/health` if the UI cannot search.
 - Check `CORS_ORIGINS` if using a frontend URL other than `localhost:5173`.
-- A `blocked` status reports a rejected access method and its HTTP result; it does not mean the source is impossible. Try a public URL import, or configure the documented API / normal authenticated browser method where available. Never automate or bypass security challenges.
+- A `blocked` status reports a rejected access method and its HTTP result; configure the documented API / normal authenticated browser method where available. Never automate or bypass security challenges.
 - `authentication_required` means the website requires a normal user session.
 - `success_empty` is only returned when the source successfully indicates that there are no matching results. A page with unrecognized markup reports `parse_error`.
 - Inspect `metadata.json` for per-file failures and attribution.
