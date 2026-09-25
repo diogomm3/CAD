@@ -18,6 +18,9 @@ def _number(value: str | None) -> int | None:
     if not match:return None
     return int(float(match.group(1)) * {"k":1000,"m":1000000,"":1}[match.group(2)])
 
+def _popularity_key(model: ModelResult) -> tuple[float, float, float]:
+    return (float(model.downloads or 0), float(model.likes or 0), float(model.rating or 0))
+
 class HTMLSearchSource(ModelSource):
     def accept_url(self, url: str) -> bool: return True
 
@@ -68,7 +71,7 @@ class HTMLSearchSource(ModelSource):
     def _missing(models):
         return {key:sum(not getattr(model,key) for model in models) for key in ("model_url","title","author","thumbnail_url")}
 
-    async def search(self, query: str, limit: int = 10) -> list[ModelResult]:
+    async def search(self, query: str, limit: int = 12) -> list[ModelResult]:
         self.ensure_enabled()
         mode=source_config(self.key)["access_mode"]
         if mode == "api": raise SourceError("UNSUPPORTED", f"{self.label} does not provide a configured API adapter.", "api")
@@ -134,10 +137,10 @@ class PrintablesSource(HTMLSearchSource):
             raise SourceError("PARSE_ERROR",f"Printables GraphQL error: {payload['errors'][0].get('message','unknown error')}","graphql")
         return payload
 
-    async def search(self, query: str, limit: int = 10) -> list[ModelResult]:
+    async def search(self, query: str, limit: int = 12) -> list[ModelResult]:
         self.ensure_enabled()
         gql="""query SearchModels($query: String!, $limit: Int!) {
-          result: searchPrints2(query: $query, printType: print, limit: $limit, ordering: best_match) {
+          result: searchPrints2(query: $query, printType: print, limit: $limit, ordering: popular) {
             items { id name slug likesCount downloadCount ratingAvg image { filePath } user { publicUsername } }
           }
         }"""
@@ -157,6 +160,7 @@ class PrintablesSource(HTMLSearchSource):
                 rating=float(item["ratingAvg"]) if item.get("ratingAvg") is not None else None,
                 popularity_value=downloads if downloads is not None else likes,popularity_label="downloads" if downloads is not None else "likes" if likes is not None else None,
                 raw_metadata={"ranking_position":index,"graphql":True}))
+        models.sort(key=_popularity_key,reverse=True)
         self.last_attempts={"graphql":f"success ({len(models)} results)"};self.last_method="graphql";self.last_status="success_empty" if not models else "success";self.last_message=None
         self.last_parse_diagnostics={"results_discovered":len(items),"accepted":len(models),"missing_fields":self._missing(models)}
         return models
@@ -166,7 +170,7 @@ class MakerWorldSource(HTMLSearchSource):
     search_url="https://makerworld.com/en/search/models?keyword={query}&orderBy=6"
     def accept_url(self,url):return "/models/" in urlparse(url).path and bool(re.search(r"/\d+(?:-|$)",urlparse(url).path))
 
-    async def search(self, query: str, limit: int = 10) -> list[ModelResult]:
+    async def search(self, query: str, limit: int = 12) -> list[ModelResult]:
         """Search MakerWorld's public listing endpoint without loading its web page."""
         self.ensure_enabled()
         method="api.bambulab.com"
@@ -174,7 +178,7 @@ class MakerWorldSource(HTMLSearchSource):
         try:
             response=await self._get_response(
                 "https://api.bambulab.com/v1/search-service/select/design2",
-                params={"keyword":query,"limit":limit},
+                params={"keyword":query,"limit":limit,"orderBy":6},
             )
             payload=response.json()
         except SourceError:
@@ -222,6 +226,7 @@ class MakerWorldSource(HTMLSearchSource):
                 available_files=files, license=item.get("license"),
                 raw_metadata={"ranking_position":index,"api":"api.bambulab.com"},
             ))
+        models.sort(key=_popularity_key,reverse=True)
         self.last_attempts={method:f"success ({len(models)} results)"};self.last_status="success_empty" if not models else "success";self.last_message=None
         self.last_parse_diagnostics={"results_discovered":len(items),"accepted":len(models),"missing_fields":self._missing(models)}
         return models
