@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import httpx
 from .base import ModelSource, canonical_url, _meta, _author_from_soup
 from .errors import SourceError
-from ..models import ModelResult
+from ..models import DownloadableFile, ModelResult
 from ..utils.filenames import category_for
 from ..config import BROWSER_AUTH_ENABLED, PLAYWRIGHT_ENABLED, source_config
 
@@ -162,9 +162,69 @@ class PrintablesSource(HTMLSearchSource):
         return models
 
 class MakerWorldSource(HTMLSearchSource):
-    key="makerworld";label="MakerWorld";domains=("makerworld.com",);download_domains=("makerworld.bblmw.com",);search_method="http+playwright"
+    key="makerworld";label="MakerWorld";domains=("makerworld.com",);download_domains=("makerworld.bblmw.com",);search_method="api.bambulab.com"
     search_url="https://makerworld.com/en/search/models?keyword={query}&orderBy=6"
     def accept_url(self,url):return "/models/" in urlparse(url).path and bool(re.search(r"/\d+(?:-|$)",urlparse(url).path))
+
+    async def search(self, query: str, limit: int = 10) -> list[ModelResult]:
+        """Search MakerWorld's public listing endpoint without loading its web page."""
+        self.ensure_enabled()
+        method="api.bambulab.com"
+        self.last_method=method
+        try:
+            response=await self._get_response(
+                "https://api.bambulab.com/v1/search-service/select/design2",
+                params={"keyword":query,"limit":limit},
+            )
+            payload=response.json()
+        except SourceError:
+            raise
+        except ValueError as exc:
+            raise SourceError("PARSE_ERROR","MakerWorld's listing endpoint returned invalid JSON.",method) from exc
+
+        items=payload.get("hits") if isinstance(payload,dict) else None
+        if not isinstance(items,list):
+            raise SourceError("PARSE_ERROR","MakerWorld's listing endpoint did not include model results.",method)
+
+        models=[]
+        for index,item in enumerate(items[:limit],1):
+            if not isinstance(item,dict):
+                continue
+            model_id=str(item.get("id") or "")
+            slug=str(item.get("slug") or "")
+            if not model_id or not slug:
+                continue
+            files=[]
+            for file in (item.get("designExtension") or {}).get("model_files") or []:
+                if not isinstance(file,dict) or file.get("isDir"):
+                    continue
+                name=str(file.get("modelName") or file.get("modelFileName") or "")
+                if not name:
+                    continue
+                extension=Path(name).suffix.lower() or f".{str(file.get('modelType') or 'file').lower()}"
+                files.append(DownloadableFile(
+                    name=name, extension=extension, category=category_for(name), size_bytes=file.get("modelSize"),
+                    downloadable=False, reason="MakerWorld did not provide a public direct download URL.",
+                ))
+            pictures=(item.get("designExtension") or {}).get("design_pictures") or []
+            image_urls=[picture.get("url") for picture in pictures if isinstance(picture,dict) and picture.get("url")]
+            cover=item.get("cover")
+            if cover and cover not in image_urls:
+                image_urls.insert(0,cover)
+            downloads=item.get("downloadCount"); likes=item.get("likeCount")
+            models.append(ModelResult(
+                id=model_id, source=self.key, title=item.get("title") or f"MakerWorld model {model_id}",
+                author=(item.get("designCreator") or {}).get("name"),
+                model_url=f"https://makerworld.com/en/models/{model_id}-{slug}", thumbnail_url=cover,
+                image_urls=image_urls, downloads=downloads, likes=likes,
+                popularity_value=downloads if downloads is not None else likes,
+                popularity_label="downloads" if downloads is not None else "likes" if likes is not None else None,
+                available_files=files, license=item.get("license"),
+                raw_metadata={"ranking_position":index,"api":"api.bambulab.com"},
+            ))
+        self.last_attempts={method:f"success ({len(models)} results)"};self.last_status="success_empty" if not models else "success";self.last_message=None
+        self.last_parse_diagnostics={"results_discovered":len(items),"accepted":len(models),"missing_fields":self._missing(models)}
+        return models
 
 class GrabCADSource(HTMLSearchSource):
     key="grabcad";label="GrabCAD";domains=("grabcad.com",);search_method="http+playwright"
