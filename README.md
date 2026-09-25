@@ -87,7 +87,7 @@ The latest end-to-end command attempt in this environment received HTTP 403 from
 
 Printables search requests public listing metadata through its GraphQL endpoint. MakerWorld search requests its public Bambu listing endpoint, which also reports model file metadata. One source failure does not interrupt the other. Sites may change their markup or block automated access; those conditions appear as a typed source status and error, separate from a successful empty search. Detail page parsing discovers linked files by extension. Downloads are accepted only over HTTPS on adapter-approved source/CDN domains. Authentication, CAPTCHA, access controls, and anti-bot challenges are not bypassed. Results and downloads must follow the site's terms, license, and rate limits.
 
-Search returns up to 10 per source in the order supplied by that source's search/API. Counts are not fabricated. Metrics that aren't reliably parsed are null. Download discovery is intentionally conservative: an unrecognized CDN is reported as unavailable until that host is explicitly validated in the source adapter.
+Search returns up to 12 per source, ranked by downloads, then likes, then rating. Counts are not fabricated. Metrics that aren't reliably parsed are null. Download discovery is intentionally conservative: an unrecognized CDN is reported as unavailable until that host is explicitly validated in the source adapter.
 
 ## Download organization and file categories
 
