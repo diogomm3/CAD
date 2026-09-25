@@ -5,7 +5,7 @@ from ..scrapers.errors import SourceError
 async def run(source_key,query):
     source=SOURCES[source_key]
     try:
-        results=await source.search(query,10)
+        results=await source.search(query,12)
         print(f"Source: {source.label}\nStatus: {'success' if results else 'success_empty'}\nResults: {len(results)}")
         for i,model in enumerate(results,1):print(f"{i}. {model.title} — {model.author or 'unknown'} — {model.model_url}")
         if results:
