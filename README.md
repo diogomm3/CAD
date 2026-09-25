@@ -76,19 +76,19 @@ Run `.venv/bin/python -m app.tools.browser_diagnostic "https://example.com"` to 
 
 ### Current live adapter check
 
-The browser smoke test passed: Chromium launched, navigated to `example.com`, and read its title and DOM. The current public and persistent-profile GrabCAD browser requests returned HTTP 403 from CloudFront with no links or result markup. Current HTTP-only GrabCAD search returns HTTP 200 but only a JavaScript-required shell and no library result links. Printables returned HTTP 403 over HTTP and public Playwright. MakerWorld HTTP access returned 403 in the earlier source check. Browser operation and site access are separate checks; a passing browser test does not imply that a site allows automated access.
+The browser smoke test passed: Chromium launched, navigated to `example.com`, and read its title and DOM. Printables search uses its public GraphQL response and returned ten live results for `thor hammer` on 25 September 2026. The same provider's direct HTML model page remains blocked in this environment, and the GraphQL detail response exposes file metadata but no public download URL. Current public and persistent-profile GrabCAD browser requests returned HTTP 403 from CloudFront with no links or result markup. Current HTTP-only GrabCAD search returns HTTP 200 but only a JavaScript-required shell and no library result links. MakerWorld HTTP access returned 403 in the earlier source check.
 
 | Source | Search | Details | Files | Live verified |
 |---|---|---|---|---|
-| Printables | HTTP and public browser blocked (403) | not checked | not checked | no |
+| Printables | GraphQL search succeeds | HTML blocked; GraphQL metadata succeeds | public direct URL not available | search only |
 | MakerWorld | blocked (403) | not checked | not checked | no |
 | GrabCAD | HTTP 200 JavaScript shell; public and authenticated browser 403 | not checked | not checked | no |
 
-The latest end-to-end command attempt in this environment received HTTP 403 from Printables at search through the public browser fallback. The persistent GrabCAD profile also received HTTP 403. No source is marked verified until search, model detail retrieval, file discovery, and a validated download all pass.
+The latest end-to-end command attempt in this environment received HTTP 403 from Printables at model-detail retrieval after GraphQL search succeeded. The persistent GrabCAD profile also received HTTP 403. No source is marked verified until search, model detail retrieval, file discovery, and a validated download all pass.
 
 ## Supported websites and scraping
 
-Printables, MakerWorld, and GrabCAD try a normal public HTML request, then a shared Playwright browser for public rendered pages. One source failure does not interrupt others. Sites may change their markup or block automated access; those conditions appear as a typed source status and error, separate from a successful empty search. Detail page parsing discovers linked files by extension. Downloads are accepted only over HTTPS on adapter-approved source/CDN domains. Authentication, CAPTCHA, access controls, and anti-bot challenges are not bypassed. Results and downloads must follow the site's terms, license, and rate limits.
+Printables search requests public listing metadata through its GraphQL endpoint. MakerWorld and GrabCAD try a normal public HTML request, then a shared Playwright browser for public rendered pages. One source failure does not interrupt others. Sites may change their markup or block automated access; those conditions appear as a typed source status and error, separate from a successful empty search. Detail page parsing discovers linked files by extension. Downloads are accepted only over HTTPS on adapter-approved source/CDN domains. Authentication, CAPTCHA, access controls, and anti-bot challenges are not bypassed. Results and downloads must follow the site's terms, license, and rate limits.
 
 Search returns up to 10 per source in the order supplied by that source's search/API. Counts are not fabricated. Metrics that aren't reliably parsed are null. Download discovery is intentionally conservative: an unrecognized CDN is reported as unavailable until that host is explicitly validated in the source adapter.
 
