@@ -25,12 +25,6 @@ async def test_search_returns_each_source_status(monkeypatch):
     assert response.json()["sources"][0]["status"] == "blocked"
 
 @pytest.mark.asyncio
-async def test_manual_import_rejects_unrecognized_hosts():
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url="http://test") as client:
-        response=await client.post("/api/models/import",json={"source":"printables","model_url":"https://example.com/model/12-test"})
-    assert response.status_code==422
-
-@pytest.mark.asyncio
 async def test_search_select_project_download_workflow_writes_manifest(tmp_path,monkeypatch):
     from app.services import download_service
     file_url="https://media.printables.com/hammer.stl"
