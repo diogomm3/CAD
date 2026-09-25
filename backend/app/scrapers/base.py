@@ -141,7 +141,7 @@ class ModelSource(ABC):
         return bool(host and any(host==domain or host.endswith("."+domain) for domain in domains))
 
     @abstractmethod
-    async def search(self, query: str, limit: int = 10) -> list[ModelResult]: ...
+    async def search(self, query: str, limit: int = 12) -> list[ModelResult]: ...
 
     async def get_model_details(self, model_url: str) -> ModelResult:
         self.ensure_enabled()
