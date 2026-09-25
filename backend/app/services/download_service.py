@@ -149,8 +149,26 @@ async def download_model(model: ModelResult, root: Path, query: str, version: st
             if temp:temp.unlink(missing_ok=True)
     for file in model.available_files:
         if not file.url or not file.downloadable:
-            skipped={"file":file.name,"status":"skipped","reason":file.reason or "not_available"};errors.append({"file":file.name,"reason":file.reason or "not_available"});file_statuses.append(skipped)
-            if status_callback:status_callback("downloading",skipped.copy())
+            temp = root.parent / f"browser-asset-{next(tempfile._get_candidate_names())}-{safe_name(file.name)}"
+            file_status={"file":file.name,"status":"queued"};file_statuses.append(file_status)
+            if status_callback:status_callback("downloading",file_status.copy())
+            try:
+                await source.download_browser_file(model.model_url, file, temp)
+                _validate_payload(temp, file.extension or temp.suffix)
+                before=len(records)
+                _record_file(temp, root, file.category or category_for(file.name), records, file.name, target_name=file.name)
+                if len(records)>before:
+                    record=records[-1];record["source_url"]=model.model_url
+                    file.local_path=record["local_path"];file.sha256=record["sha256"];file.size_bytes=record["size_bytes"];file.original_name=file.name;file.source_url=model.model_url
+                file_status["status"]="completed"
+                if status_callback:status_callback("downloading",file_status.copy())
+            except Exception as exc:
+                reason = str(exc)[:180]
+                errors.append({"file":file.name,"reason":reason})
+                file_status.update(status="failed",reason=reason)
+                if status_callback:status_callback("downloading",file_status.copy())
+            finally:
+                temp.unlink(missing_ok=True)
             continue
         temp = root.parent / f"asset-{next(tempfile._get_candidate_names())}-{safe_name(file.name)}"
         file_status={"file":file.name,"status":"queued"};file_statuses.append(file_status)
