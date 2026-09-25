@@ -205,6 +205,45 @@ class ModelSource(ABC):
                 file.size_bytes=total
         return destination
 
+    async def download_browser_file(self, model_url: str, file: DownloadableFile, destination: Path):
+        """Use the provider's normal browser download action when no direct URL is exposed."""
+        if not PLAYWRIGHT_ENABLED:
+            raise SourceError("UNSUPPORTED", "Browser downloads are disabled.", "browser_download")
+        authenticated = self.config["access_mode"] == "authenticated_browser" or BROWSER_AUTH_ENABLED
+        page = None
+        try:
+            from ..browser import BROWSER
+            page = await BROWSER.new_page(authenticated=authenticated)
+            response = await page.goto(model_url, wait_until="domcontentloaded", timeout=int(HTTP_TIMEOUT_SECONDS * 1000))
+            if response and response.status in {401, 403, 429}:
+                raise SourceError(f"HTTP_{response.status}", f"Browser page returned HTTP {response.status}.", "browser_download")
+            await page.wait_for_timeout(1200)
+            if re.search(r"captcha|verify you are human|checking your browser|access denied", await page.content(), re.I):
+                raise SourceError("BLOCKED", "The provider presented an access challenge.", "browser_download")
+            wanted = {file.extension.lower(), Path(file.name).suffix.lower()}
+            stem = Path(file.name).stem.lower()
+            candidates = page.locator("a, button")
+            for index in range(min(await candidates.count(), 120)):
+                candidate = candidates.nth(index)
+                text = (await candidate.inner_text()).strip().lower()
+                href = (await candidate.get_attribute("href") or "").lower()
+                haystack = f"{text} {href}"
+                if not (any(ext and ext in haystack for ext in wanted) or stem and stem in haystack or "download" in haystack):
+                    continue
+                try:
+                    async with page.expect_download(timeout=5000) as pending:
+                        await candidate.click(timeout=3000)
+                    download = await pending.value
+                    await download.save_as(str(destination))
+                    if destination.exists() and destination.stat().st_size:
+                        return destination
+                except Exception:
+                    continue
+            raise SourceError("DOWNLOAD_UNAVAILABLE", f"No browser download action was available for {file.name}.", "browser_download")
+        finally:
+            if page is not None:
+                await page.close()
+
     def parse_detail(self, html: str, url: str) -> ModelResult:
         soup = BeautifulSoup(html, "lxml")
         canonical = soup.find("link", rel="canonical")
