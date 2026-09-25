@@ -79,16 +79,16 @@ async def test_search_all_keeps_working_source_when_another_is_blocked(monkeypat
     from app.services import search_service
     from app.scrapers.errors import SourceError
     class Good:
-        label="GrabCAD";search_method="http"
+        label="MakerWorld";search_method="http"
         last_method=None;last_status="ready";last_message=None
-        async def search(self,query,limit):return [ModelResult(id="1",source="grabcad",title="Model",model_url="https://grabcad.com/library/1-model")]
+        async def search(self,query,limit):return [ModelResult(id="1",source="makerworld",title="Model",model_url="https://makerworld.com/en/models/1-model")]
     class Blocked:
         label="Printables";search_method="http"
         last_method=None;last_status="ready";last_message=None
         async def search(self,query,limit):raise SourceError("HTTP_403","Source returned HTTP 403.","http")
-    monkeypatch.setattr(search_service,"SOURCES",{"grabcad":Good(),"printables":Blocked()})
+    monkeypatch.setattr(search_service,"SOURCES",{"makerworld":Good(),"printables":Blocked()})
     results=await search_service.search_all("hammer")
-    assert [(item["source"],item["status"],len(item["results"])) for item in results]==[("grabcad","success",1),("printables","blocked",0)]
+    assert [(item["source"],item["status"],len(item["results"])) for item in results]==[("makerworld","success",1),("printables","blocked",0)]
 
 @pytest.mark.asyncio
 async def test_source_status_diagnostics():
@@ -96,4 +96,4 @@ async def test_source_status_diagnostics():
         response=await client.get("/api/sources/status")
     assert response.status_code==200
     sources=response.json()["sources"]
-    assert [source["id"] for source in sources]==["printables","makerworld","grabcad"]
+    assert [source["id"] for source in sources]==["printables","makerworld"]
