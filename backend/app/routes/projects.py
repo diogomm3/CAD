@@ -1,7 +1,6 @@
 import asyncio, uuid, logging, json
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 from ..schemas import ProjectRequest
 from ..config import PROJECTS_DIR
 from ..models import ModelResult
@@ -57,30 +56,6 @@ async def create_project(request: ProjectRequest):
     job_id=uuid.uuid4().hex
     JOBS[job_id]={"job_id":job_id,"status":"queued","progress":0,"message":"Queued","projects":[]}
     asyncio.create_task(run_job(job_id, request))
-    return JOBS[job_id]
-
-class ImportRequest(BaseModel):
-    model_url: str
-    source: str | None = None
-    query: str | None = None
-
-@router.post("/models/import",status_code=202)
-async def import_model(request: ImportRequest):
-    from urllib.parse import urlparse
-    host=(urlparse(request.model_url).hostname or "").lower()
-    matches=[source for source in SOURCES.values() if source._host_allowed(host,source.domains)]
-    if len(matches)!=1:raise HTTPException(422,"Model URL is not from a supported source")
-    source=matches[0]
-    if request.source and request.source!=source.key:raise HTTPException(422,"The selected source does not match the model URL")
-    try:source.validate_url(request.model_url)
-    except ValueError as exc:raise HTTPException(422,str(exc)) from exc
-    if not source.config["enabled"] or source.config["access_mode"]=="disabled":raise HTTPException(422,"This source is disabled")
-    model_id=request.model_url.rstrip("/").split("/")[-1]
-    query=(request.query or model_id).strip()[:120] or model_id
-    project_request=ProjectRequest(query=query,models=[{"source":source.key,"model_id":model_id,"model_url":request.model_url}])
-    job_id=uuid.uuid4().hex
-    JOBS[job_id]={"job_id":job_id,"status":"queued","progress":0,"message":"Queued URL import","projects":[]}
-    asyncio.create_task(run_job(job_id,project_request))
     return JOBS[job_id]
 
 @router.get("/projects/{job_id}")
