@@ -1,7 +1,7 @@
 """Open a normal visible browser for a user to log in manually."""
 import argparse, asyncio, os
 
-URLS={"printables":"https://www.printables.com/","makerworld":"https://makerworld.com/","grabcad":"https://grabcad.com/library"}
+URLS={"printables":"https://www.printables.com/","makerworld":"https://makerworld.com/"}
 
 async def main():
     parser=argparse.ArgumentParser(description="Open the persistent profile for manual website login")
