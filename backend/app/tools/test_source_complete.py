@@ -16,7 +16,7 @@ async def run(source_key: str, query: str):
     global workflow_stage
     workflow_stage="search"
     print("="*50, f"\nSource: {source.label}\nQuery: {query}\n"+"="*50)
-    models=await source.search(query,limit=10)
+    models=await source.search(query,limit=12)
     if not models:raise RuntimeError("Search returned no results")
     print(f"Search:             OK\nResults:            {len(models)}")
     workflow_stage="model details"
