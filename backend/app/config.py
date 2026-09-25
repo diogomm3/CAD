@@ -20,7 +20,7 @@ BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() in {"1", "true"
 BROWSER_AUTH_ENABLED = os.getenv("BROWSER_AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}
 MAX_FILE_SIZE_MB = max(1, float(os.getenv("MAX_FILE_SIZE_MB", "1000")))
 
-SOURCE_KEYS = ("printables", "makerworld", "grabcad")
+SOURCE_KEYS = ("printables", "makerworld")
 SOURCE_CONFIG = {
     key: {
         "enabled": os.getenv(f"{key.upper()}_ENABLED", "true").lower() in {"1", "true", "yes"},
