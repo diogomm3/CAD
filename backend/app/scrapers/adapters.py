@@ -2,6 +2,7 @@ import logging, re
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse
 from bs4 import BeautifulSoup
+import httpx
 from .base import ModelSource, canonical_url, _meta, _author_from_soup
 from .errors import SourceError
 from ..models import ModelResult
@@ -104,9 +105,61 @@ class HTMLSearchSource(ModelSource):
         raise SourceError("UNSUPPORTED", "No access method is enabled for this source.")
 
 class PrintablesSource(HTMLSearchSource):
-    key="printables";label="Printables";domains=("printables.com",);download_domains=("media.printables.com",);search_method="http+playwright"
+    key="printables";label="Printables";domains=("printables.com",);download_domains=("media.printables.com",);search_method="graphql"
     search_url="https://www.printables.com/search/models?q={query}&o=popular"
     def accept_url(self,url):return bool(re.search(r"/model/\d+",urlparse(url).path))
+
+    async def _graphql(self, query: str, variables: dict) -> dict:
+        """Request public listing metadata through Printables' GraphQL endpoint."""
+        await self._respect_rate()
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                response=await client.post("https://api.printables.com/graphql/",json={"query":query,"variables":variables},headers={
+                    "Content-Type":"application/json", "Origin":"https://www.printables.com", "Referer":"https://www.printables.com/",
+                    "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/134.0 Safari/537.36",
+                })
+        except httpx.TimeoutException as exc:
+            raise SourceError("TIMEOUT","The Printables GraphQL request timed out.","graphql") from exc
+        except httpx.RequestError as exc:
+            raise SourceError("NETWORK_ERROR",f"The Printables GraphQL endpoint could not be reached: {type(exc).__name__}.","graphql") from exc
+        if response.status_code in {401,403,429}:
+            message={401:"Printables requires authentication.",403:"Printables rejected the GraphQL request.",429:"Printables rate limit reached."}[response.status_code]
+            raise SourceError(f"HTTP_{response.status_code}",message,"graphql")
+        try: response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise SourceError(f"HTTP_{response.status_code}",f"Printables GraphQL returned HTTP {response.status_code}.","graphql") from exc
+        try: payload=response.json()
+        except ValueError as exc: raise SourceError("PARSE_ERROR","Printables GraphQL returned invalid JSON.","graphql") from exc
+        if payload.get("errors"):
+            raise SourceError("PARSE_ERROR",f"Printables GraphQL error: {payload['errors'][0].get('message','unknown error')}","graphql")
+        return payload
+
+    async def search(self, query: str, limit: int = 10) -> list[ModelResult]:
+        self.ensure_enabled()
+        gql="""query SearchModels($query: String!, $limit: Int!) {
+          result: searchPrints2(query: $query, printType: print, limit: $limit, ordering: best_match) {
+            items { id name slug likesCount downloadCount ratingAvg image { filePath } user { publicUsername } }
+          }
+        }"""
+        payload=await self._graphql(gql,{"query":query,"limit":limit})
+        items=payload.get("data",{}).get("result",{}).get("items",[])
+        if not isinstance(items,list): raise SourceError("PARSE_ERROR","Printables GraphQL response did not include model results.","graphql")
+        models=[]
+        for index,item in enumerate(items[:limit],1):
+            model_id=str(item.get("id") or ""); slug=str(item.get("slug") or "")
+            if not model_id or not slug: continue
+            image_path=(item.get("image") or {}).get("filePath")
+            image_url=f"https://media.printables.com/{image_path.lstrip('/')}" if image_path else None
+            downloads=item.get("downloadCount"); likes=item.get("likesCount")
+            models.append(ModelResult(id=model_id,source=self.key,title=item.get("name") or f"Printables model {model_id}",
+                author=(item.get("user") or {}).get("publicUsername"),model_url=f"https://www.printables.com/model/{model_id}-{slug}",
+                thumbnail_url=image_url,image_urls=[image_url] if image_url else [],downloads=downloads,likes=likes,
+                rating=float(item["ratingAvg"]) if item.get("ratingAvg") is not None else None,
+                popularity_value=downloads if downloads is not None else likes,popularity_label="downloads" if downloads is not None else "likes" if likes is not None else None,
+                raw_metadata={"ranking_position":index,"graphql":True}))
+        self.last_attempts={"graphql":f"success ({len(models)} results)"};self.last_method="graphql";self.last_status="success_empty" if not models else "success";self.last_message=None
+        self.last_parse_diagnostics={"results_discovered":len(items),"accepted":len(models),"missing_fields":self._missing(models)}
+        return models
 
 class MakerWorldSource(HTMLSearchSource):
     key="makerworld";label="MakerWorld";domains=("makerworld.com",);download_domains=("makerworld.bblmw.com",);search_method="http+playwright"
