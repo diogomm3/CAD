@@ -112,6 +112,27 @@ class PrintablesSource(HTMLSearchSource):
     search_url="https://www.printables.com/search/models?q={query}&o=popular"
     def accept_url(self,url):return bool(re.search(r"/model/\d+",urlparse(url).path))
 
+    async def get_model_details(self, model_url: str) -> ModelResult:
+        self.ensure_enabled(); self.validate_url(model_url)
+        match=re.search(r"/model/(\d+)",urlparse(model_url).path)
+        if not match:return await super().get_model_details(model_url)
+        gql="""query PrintDetails($id: ID!) {
+          print(id: $id) { id name slug stls { id name fileSize filePreviewPath } image { filePath } user { publicUsername } }
+        }"""
+        try:
+            payload=await self._graphql(gql,{"id":match.group(1)})
+            item=(payload.get("data") or {}).get("print")
+            if not item:return await super().get_model_details(model_url)
+            files=[]
+            for item_file in item.get("stls") or []:
+                name=item_file.get("name") or f"{item_file.get('id','model')}.stl"
+                files.append(DownloadableFile(name=name,extension=Path(name).suffix.lower() or ".stl",category=category_for(name),size_bytes=item_file.get("fileSize"),downloadable=False,reason="Printables requires the normal browser download action."))
+            image_path=(item.get("image") or {}).get("filePath")
+            image=f"https://media.printables.com/{image_path.lstrip('/')}" if image_path else None
+            return ModelResult(id=match.group(1),source=self.key,title=item.get("name") or match.group(1),author=(item.get("user") or {}).get("publicUsername"),model_url=model_url,thumbnail_url=image,image_urls=[image] if image else [],available_files=files,raw_metadata={"graphql":True})
+        except SourceError:
+            raise
+
     async def _graphql(self, query: str, variables: dict) -> dict:
         """Request public listing metadata through Printables' GraphQL endpoint."""
         await self._respect_rate()
