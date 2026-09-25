@@ -9,7 +9,7 @@ async def main(query="thor hammer"):
     for key,source in SOURCES.items():
         print("="*50);print(source.label);print("="*50)
         try:
-            results=await source.search(query,10)
+            results=await source.search(query,12)
             print("Status:","OK" if results else "SUCCESS_EMPTY");print("Results:",len(results))
             if results:
                 first=results[0]
