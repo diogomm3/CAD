@@ -3,7 +3,7 @@ from ..scrapers.registry import SOURCES
 
 def model_url(source,model_id):
     if model_id.startswith("https://"):return model_id
-    patterns={"printables":f"https://www.printables.com/model/{model_id}","makerworld":f"https://makerworld.com/en/models/{model_id}","grabcad":f"https://grabcad.com/library/{model_id}"}
+    patterns={"printables":f"https://www.printables.com/model/{model_id}","makerworld":f"https://makerworld.com/en/models/{model_id}"}
     return patterns[source]
 
 async def run(key,model_id):
