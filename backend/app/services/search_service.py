@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 def _diagnostics(source):
     return {"access":getattr(source,"last_attempts",{}),"parse":getattr(source,"last_parse_diagnostics",{})}
 
-async def search_all(query: str, limit: int = 10):
+async def search_all(query: str, limit: int = 12):
     semaphore=asyncio.Semaphore(MAX_CONCURRENT_SITES)
     async def one(key, source):
         try:
@@ -35,7 +35,7 @@ async def search_all(query: str, limit: int = 10):
                 "results":[],"error":{"code":"UNEXPECTED_ERROR","message":"Unable to search this source right now."}}
     return await asyncio.gather(*(one(k, s) for k, s in SOURCES.items()))
 
-async def search_source(query: str, key: str, limit: int = 10):
+async def search_source(query: str, key: str, limit: int = 12):
     if key not in SOURCES: raise KeyError(key)
     source=SOURCES[key]
     try:
