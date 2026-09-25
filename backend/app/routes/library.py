@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from ..config import PROJECTS_DIR
 from ..utils.filenames import category_for
 
 router = APIRouter()
-VERSION_PATTERN = __import__("re").compile(r"^v(\d+)$", __import__("re").IGNORECASE)
+VERSION_PATTERN = re.compile(r"^v(\d+)$", re.IGNORECASE)
 
 
 def _read_json(path: Path) -> dict:
