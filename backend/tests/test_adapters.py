@@ -50,7 +50,7 @@ async def test_graphql_403_is_reported_as_blocked(monkeypatch):
 async def test_printables_graphql_search_normalizes_result_cards(monkeypatch):
     adapter=PrintablesSource()
     async def graphql(query,variables):
-        assert variables=={"query":"thor hammer","limit":10}
+        assert variables=={"query":"thor hammer","limit":12}
         return {"data":{"result":{"items":[{"id":"447061","slug":"thor-hammer-bookend","name":"Thor hammer bookend","likesCount":144,"downloadCount":934,"ratingAvg":"4.5","image":{"filePath":"media/prints/447061/cover.jpg"},"user":{"publicUsername":"PurpxHaze91"}}]}}}
     monkeypatch.setattr(adapter,"_graphql",graphql)
     results=await adapter.search("thor hammer")
@@ -68,7 +68,7 @@ async def test_makerworld_api_search_normalizes_cards_and_file_metadata(monkeypa
             return {"hits":[{"id":42372,"slug":"thor-hammer","title":"Thor Hammer","cover":"https://makerworld.bblmw.com/cover.jpg","likeCount":1603,"downloadCount":5334,"license":"CC0","designCreator":{"name":"sWc Creation"},"designExtension":{"design_pictures":[{"url":"https://makerworld.bblmw.com/second.jpg"}],"model_files":[{"modelName":"body.stl","modelSize":1226484,"modelType":"stl","modelUrl":""},{"modelName":"plate.3mf","modelSize":105684,"modelType":"3mf","modelUrl":""}]}}]}
     async def get_response(url,*,params=None,headers=None):
         assert url=="https://api.bambulab.com/v1/search-service/select/design2"
-        assert params=={"keyword":"thor hammer","limit":10}
+        assert params=={"keyword":"thor hammer","limit":12,"orderBy":6}
         return Response()
     monkeypatch.setattr(adapter,"_get_response",get_response)
     results=await adapter.search("thor hammer")
