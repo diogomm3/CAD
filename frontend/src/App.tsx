@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Search, Download, ExternalLink, Box, LoaderCircle, Check, AlertCircle } from 'lucide-react'
 import type { Model, SearchResponse, SourceResult, SourceAvailability } from './types'
 
-const sourceOrder=['printables','makerworld','grabcad']
-const niceName:Record<string,string>={printables:'Printables',makerworld:'MakerWorld',grabcad:'GrabCAD'}
+const sourceOrder=['printables','makerworld']
+const niceName:Record<string,string>={printables:'Printables',makerworld:'MakerWorld'}
 
 export default function App(){
   const [query,setQuery]=useState(''); const [response,setResponse]=useState<SearchResponse|null>(null)
@@ -41,12 +41,12 @@ export default function App(){
         {group.status==='success_empty'?<div className="sourceMessage">No models found for this search.</div>:!['success'].includes(group.status)?<div className="sourceMessage"><strong>Unable to access {niceName[group.source]||group.label}.</strong><br/>{group.error?.message||'The source is unavailable right now.'}<div className="unavailableActions"><button className="retry" onClick={()=>retrySource(group.source)} disabled={retrying!==null}>{retrying===group.source?'Retrying…':'Retry source'}</button><a href={sourceWebsite(group.source)} target="_blank" rel="noreferrer">Open website ↗</a></div></div>:<div className="grid">{group.results.map(model=><Card key={`${model.source}-${model.id}`} model={model} chosen={selected.some(x=>x.source===model.source&&x.id===model.id)} disabled={!selected.some(x=>x.source===model.source&&x.id===model.id)&&selected.length>=5} onToggle={()=>toggle(model)}/>)}</div>}
       </section>)}
     </section>}
-    {!response&&!busy&&<section className="below"><div className="belowIcon"><Search size={22}/></div><span>THREE COMMUNITIES · ONE SEARCH</span><p>Printables, MakerWorld, and GrabCAD Community.</p></section>}
+    {!response&&!busy&&<section className="below"><div className="belowIcon"><Search size={22}/></div><span>TWO COMMUNITIES · ONE SEARCH</span><p>Printables and MakerWorld.</p></section>}
     <footer><span>FORMFINDER <i>·</i> PERSONAL MAKER TOOL</span><span>Respect each model’s license and source attribution.</span></footer>
   </main>
 }
 
-function sourceWebsite(source:string){return ({printables:'https://www.printables.com',makerworld:'https://makerworld.com',grabcad:'https://grabcad.com/library'} as Record<string,string>)[source]||'https://example.com'}
+function sourceWebsite(source:string){return ({printables:'https://www.printables.com',makerworld:'https://makerworld.com'} as Record<string,string>)[source]||'https://example.com'}
 
 function Card({model,chosen,disabled,onToggle}:{model:Model;chosen:boolean;disabled:boolean;onToggle:()=>void}){
   const popularity=model.downloads!=null?`${model.downloads.toLocaleString()} downloads`:model.likes!=null?`${model.likes.toLocaleString()} likes`:model.favorites!=null?`${model.favorites.toLocaleString()} saves`:null
