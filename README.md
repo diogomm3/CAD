@@ -39,6 +39,8 @@ docker compose up --build
 
 The UI is at `http://localhost:5173`; the API is at `http://localhost:8000`. `./Projects` is mounted at `/Projects` in the backend container.
 
+The **Library** view reads the local `Projects/` directory and groups each project's `v1`, `v2`, and later folders under one project card. It supports 20 projects per page, project search, sorting by recent activity/name/file count, and a detail view for each saved print and its local files. Older project folders without a manifest or version directory are shown as a single legacy `v1`.
+
 ## Configuration
 
 Copy `backend/.env.example` to `backend/.env`. A relative `PROJECTS_DIR` is resolved from the backend directory, so the default `../Projects` points to the repository's sibling `Projects/` directory.
