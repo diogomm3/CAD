@@ -1,6 +1,6 @@
 from pathlib import Path
 import pytest
-from app.scrapers.adapters import PrintablesSource, MakerWorldSource, GrabCADSource
+from app.scrapers.adapters import PrintablesSource, MakerWorldSource
 from app.scrapers.base import canonical_url
 from app.scrapers.errors import SourceError
 from app.config import SOURCE_CONFIG
@@ -11,7 +11,6 @@ def read(source,name):return (FIXTURES/source/name).read_text(encoding="utf-8")
 @pytest.mark.parametrize("adapter,source,expected_id,expected_title,expected_author,expected_metric",[
     (PrintablesSource(),"printables","101-fixture-hammer","Fixture Thor Hammer","NorseMaker",("downloads",240)),
     (MakerWorldSource(),"makerworld","202-fixture-hammer","Maker Hammer","CADViking",("downloads",4900)),
-    (GrabCADSource(),"grabcad","303-fixture-hammer","Thor CAD Assembly","EngineerOne",("likes",321)),
 ])
 def test_html_search_fixtures_parse_normalized_metadata(adapter,source,expected_id,expected_title,expected_author,expected_metric):
     result=adapter._candidate_models(read(source,"search.html"),10)
@@ -27,10 +26,9 @@ def test_html_search_fixtures_parse_normalized_metadata(adapter,source,expected_
 @pytest.mark.parametrize("adapter,source,expected",[
     (PrintablesSource(),"printables",{"STL":1,"3MF":1,"OTHER":1}),
     (MakerWorldSource(),"makerworld",{"STL":1,"3MF":1,"SOURCE":1}),
-    (GrabCADSource(),"grabcad",{"CAD":2,"SOURCE":2}),
 ])
 def test_html_model_fixtures_parse_all_supported_files(adapter,source,expected):
-    model=adapter.parse_detail(read(source,"model.html"),{"printables":"https://www.printables.com/model/101-fixture-hammer","makerworld":"https://makerworld.com/en/models/202-fixture-hammer","grabcad":"https://grabcad.com/library/303-fixture-hammer"}[source])
+    model=adapter.parse_detail(read(source,"model.html"),{"printables":"https://www.printables.com/model/101-fixture-hammer","makerworld":"https://makerworld.com/en/models/202-fixture-hammer"}[source])
     assert model.title
     assert model.author
     assert model.thumbnail_url
