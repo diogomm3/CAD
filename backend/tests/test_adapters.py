@@ -62,6 +62,25 @@ async def test_printables_graphql_search_normalizes_result_cards(monkeypatch):
     assert results[0].thumbnail_url=="https://media.printables.com/media/prints/447061/cover.jpg"
     assert results[0].downloads==934 and results[0].author=="PurpxHaze91"
 
+@pytest.mark.asyncio
+async def test_makerworld_api_search_normalizes_cards_and_file_metadata(monkeypatch):
+    adapter=MakerWorldSource()
+    class Response:
+        def json(self):
+            return {"hits":[{"id":42372,"slug":"thor-hammer","title":"Thor Hammer","cover":"https://makerworld.bblmw.com/cover.jpg","likeCount":1603,"downloadCount":5334,"license":"CC0","designCreator":{"name":"sWc Creation"},"designExtension":{"design_pictures":[{"url":"https://makerworld.bblmw.com/second.jpg"}],"model_files":[{"modelName":"body.stl","modelSize":1226484,"modelType":"stl","modelUrl":""},{"modelName":"plate.3mf","modelSize":105684,"modelType":"3mf","modelUrl":""}]}}]}
+    async def get_response(url,*,params=None,headers=None):
+        assert url=="https://api.bambulab.com/v1/search-service/select/design2"
+        assert params=={"keyword":"thor hammer","limit":10}
+        return Response()
+    monkeypatch.setattr(adapter,"_get_response",get_response)
+    results=await adapter.search("thor hammer")
+    assert len(results)==1
+    model=results[0]
+    assert model.model_url=="https://makerworld.com/en/models/42372-thor-hammer"
+    assert model.author=="sWc Creation" and model.downloads==5334 and model.license=="CC0"
+    assert model.image_urls==["https://makerworld.bblmw.com/cover.jpg","https://makerworld.bblmw.com/second.jpg"]
+    assert [(file.name,file.category,file.downloadable) for file in model.available_files]==[("body.stl","STL",False),("plate.3mf","3MF",False)]
+
 def test_canonical_url_removes_tracking_and_keeps_identity_query():
     assert canonical_url("/model/42?variant=3&utm_source=mail","https://www.printables.com/search") == "https://www.printables.com/model/42?variant=3"
 
