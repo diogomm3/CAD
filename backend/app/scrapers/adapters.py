@@ -225,8 +225,3 @@ class MakerWorldSource(HTMLSearchSource):
         self.last_attempts={method:f"success ({len(models)} results)"};self.last_status="success_empty" if not models else "success";self.last_message=None
         self.last_parse_diagnostics={"results_discovered":len(items),"accepted":len(models),"missing_fields":self._missing(models)}
         return models
-
-class GrabCADSource(HTMLSearchSource):
-    key="grabcad";label="GrabCAD";domains=("grabcad.com",);search_method="http+playwright"
-    search_url="https://grabcad.com/library?query={query}&sort=popular"
-    def accept_url(self,url):return "/library/" in urlparse(url).path and urlparse(url).path!="/library/"
