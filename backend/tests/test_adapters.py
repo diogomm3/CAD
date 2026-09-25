@@ -40,15 +40,27 @@ def test_html_model_fixtures_parse_all_supported_files(adapter,source,expected):
     assert not any(file.extension in {".gcode",".bgcode"} for file in model.available_files)
 
 @pytest.mark.asyncio
-async def test_http_403_remains_blocked_when_browser_runtime_is_missing(monkeypatch):
+async def test_graphql_403_is_reported_as_blocked(monkeypatch):
     adapter=PrintablesSource()
-    async def denied(url):raise SourceError("HTTP_403","Source returned HTTP 403.","http")
-    async def browser_error(url,authenticated=False):raise SourceError("BROWSER_UNAVAILABLE","Browser unavailable.","playwright_public")
-    monkeypatch.setattr(adapter,"_get",denied)
-    monkeypatch.setattr(adapter,"_browser_html",browser_error)
+    async def denied(query,variables):raise SourceError("HTTP_403","Printables rejected the GraphQL request.","graphql")
+    monkeypatch.setattr(adapter,"_graphql",denied)
     with pytest.raises(SourceError) as error:await adapter.search("thor hammer")
     assert error.value.status=="blocked"
     assert error.value.code=="HTTP_403"
+
+@pytest.mark.asyncio
+async def test_printables_graphql_search_normalizes_result_cards(monkeypatch):
+    adapter=PrintablesSource()
+    async def graphql(query,variables):
+        assert variables=={"query":"thor hammer","limit":10}
+        return {"data":{"result":{"items":[{"id":"447061","slug":"thor-hammer-bookend","name":"Thor hammer bookend","likesCount":144,"downloadCount":934,"ratingAvg":"4.5","image":{"filePath":"media/prints/447061/cover.jpg"},"user":{"publicUsername":"PurpxHaze91"}}]}}}
+    monkeypatch.setattr(adapter,"_graphql",graphql)
+    results=await adapter.search("thor hammer")
+    assert len(results)==1
+    assert results[0].id=="447061"
+    assert results[0].model_url=="https://www.printables.com/model/447061-thor-hammer-bookend"
+    assert results[0].thumbnail_url=="https://media.printables.com/media/prints/447061/cover.jpg"
+    assert results[0].downloads==934 and results[0].author=="PurpxHaze91"
 
 def test_canonical_url_removes_tracking_and_keeps_identity_query():
     assert canonical_url("/model/42?variant=3&utm_source=mail","https://www.printables.com/search") == "https://www.printables.com/model/42?variant=3"
@@ -70,9 +82,9 @@ async def test_source_can_be_disabled_without_contacting_website(monkeypatch):
 async def test_http_mode_does_not_start_browser(monkeypatch):
     adapter=PrintablesSource()
     monkeypatch.setitem(SOURCE_CONFIG["printables"],"access_mode","http")
-    async def html(url):return read("printables","search.html")
+    async def graphql(query,variables):return {"data":{"result":{"items":[{"id":"101","slug":"fixture-hammer","name":"Fixture Hammer","user":{}}]}}}
     async def browser(*args,**kwargs):raise AssertionError("browser must not be used in http mode")
-    monkeypatch.setattr(adapter,"_get",html)
+    monkeypatch.setattr(adapter,"_graphql",graphql)
     monkeypatch.setattr(adapter,"_browser_html",browser)
     result=await adapter.search("hammer")
     assert len(result)==1
