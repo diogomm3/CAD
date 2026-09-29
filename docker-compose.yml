@@ -9,9 +9,11 @@ services:
       PROJECTS_DIR: /Projects
       CORS_ORIGINS: http://localhost:5173
       BROWSER_PROFILE_DIR: /browser-profile
+      BAMBULAB_TOKEN_FILE: /host-backend/.bambu_token
     volumes:
       - ./Projects:/Projects
       - ./browser-profile:/browser-profile
+      - ./backend:/host-backend:ro
   frontend:
     build: ./frontend
     ports: ["5173:5173"]
