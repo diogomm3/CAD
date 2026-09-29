@@ -16,7 +16,7 @@ from ..services.bambu_auth import BAMBU_API
 workflow_stage="search"
 
 
-async def run(source_key: str, query: str, inspect_scrapling_page: bool = False, force_scrapling_download: bool = False, force_scrapling_search: bool = False):
+async def run(source_key: str, query: str, inspect_scrapling_page: bool = False, force_scrapling_download: bool = False, force_scrapling_search: bool = False, download_all_files: bool = False):
     source=SOURCES[source_key]
     global workflow_stage
     workflow_stage="search"
@@ -80,6 +80,18 @@ async def run(source_key: str, query: str, inspect_scrapling_page: bool = False,
         print(f"{category + ':':20}{sum(item.category==category for item in files)}")
     for item in files:
         print(f"File: {item.name} | downloadable={item.downloadable} | url={bool(item.url)} | reason={item.reason or 'none'}")
+    if download_all_files:
+        selected_files=[item for item in files if item.downloadable and item.url]
+        if not selected_files:raise RuntimeError("No direct downloadable files were discovered")
+        with tempfile.TemporaryDirectory(prefix="formfinder-all-files-test-") as temp_dir:
+            for selected in selected_files:
+                target=Path(temp_dir)/Path(selected.name).name
+                workflow_stage=f"download {selected.name}"
+                await source.download_file(selected,target)
+                _validate_payload(target,selected.extension or target.suffix)
+                print(f"Verified:           {target.name} ({target.stat().st_size:,} bytes)")
+        print(f"COMPLETE ALL-FILES TEST: PASS ({len(selected_files)} files)")
+        return
     if force_scrapling_download:
         selected=next((item for item in files if item.extension.lower()==".stl"),None)
         if not selected:raise RuntimeError("No STL entry was returned by model details")
@@ -125,8 +137,9 @@ def main():
     parser.add_argument("--inspect-scrapling-page",action="store_true",help="Fetch the first result page with Scrapling and list file/download actions")
     parser.add_argument("--force-scrapling-download",action="store_true",help="Click the first STL download action using Scrapling and validate the file")
     parser.add_argument("--force-scrapling-search",action="store_true",help="Search through the source HTML page using Scrapling instead of its API")
+    parser.add_argument("--download-all-files",action="store_true",help="Download and validate every file returned as directly downloadable")
     args=parser.parse_args()
-    try:asyncio.run(run(args.source,args.query,args.inspect_scrapling_page,args.force_scrapling_download,args.force_scrapling_search))
+    try:asyncio.run(run(args.source,args.query,args.inspect_scrapling_page,args.force_scrapling_download,args.force_scrapling_search,args.download_all_files))
     except Exception as exc:
         print(f"\nCOMPLETE END-TO-END TEST: FAIL\nStage: {workflow_stage} — {type(exc).__name__}: {exc}")
         raise SystemExit(1)
