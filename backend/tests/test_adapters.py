@@ -38,13 +38,17 @@ def test_html_model_fixtures_parse_all_supported_files(adapter,source,expected):
     assert not any(file.extension in {".gcode",".bgcode"} for file in model.available_files)
 
 @pytest.mark.asyncio
-async def test_graphql_403_is_reported_as_blocked(monkeypatch):
+async def test_graphql_403_retries_search_through_html_adapter(monkeypatch):
     adapter=PrintablesSource()
     async def denied(query,variables):raise SourceError("HTTP_403","Printables rejected the GraphQL request.","graphql")
+    called=[]
+    async def html_search(self,query,limit=12):
+        called.append((query,limit))
+        return []
     monkeypatch.setattr(adapter,"_graphql",denied)
-    with pytest.raises(SourceError) as error:await adapter.search("thor hammer")
-    assert error.value.status=="blocked"
-    assert error.value.code=="HTTP_403"
+    monkeypatch.setattr("app.scrapers.adapters.HTMLSearchSource.search",html_search)
+    assert await adapter.search("thor hammer")==[]
+    assert called==[("thor hammer",12)]
 
 @pytest.mark.asyncio
 async def test_printables_graphql_search_normalizes_result_cards(monkeypatch):
