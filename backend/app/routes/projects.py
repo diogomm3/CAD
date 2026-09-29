@@ -39,6 +39,10 @@ async def run_job(job_id, request):
         if final_status=="failed":
             reason=next((error.get("reason") or error.get("message") for outcome in outcomes for error in outcome.get("download_errors",[])),None)
             if reason:message=f"Downloads failed: {reason}"
+        elif final_status=="partial":
+            download_errors=[error for outcome in outcomes for error in outcome.get("download_errors",[]) if error.get("file")!="preview image"]
+            reason=next((error.get("message") or error.get("reason") for error in download_errors),None)
+            if reason:message=f"Downloads finished with some files unavailable: {reason[:180]}"
         job.update(status=final_status,progress=100,message=message,projects=outcomes,
             project_name=project.name,version=f"v{len(request.models)}",path=f"{project.name}/v{len(request.models)}",project_path=project.name)
     except Exception as exc:
