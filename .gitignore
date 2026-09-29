@@ -1,5 +1,6 @@
 Projects/
 backend/.venv/
+backend/.bambu_token
 browser-profile/
 backend/debug/
 frontend/node_modules/
