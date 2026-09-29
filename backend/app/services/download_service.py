@@ -7,6 +7,7 @@ import httpx
 from ..config import PROJECTS_DIR, HTTP_TIMEOUT_SECONDS, MAX_FILE_SIZE_MB
 from ..models import ModelResult
 from ..scrapers.registry import SOURCES
+from ..scrapers.errors import SourceError
 from ..utils.filenames import safe_name, category_for, filename_from_url
 
 log = logging.getLogger(__name__)
@@ -197,7 +198,7 @@ async def download_model(model: ModelResult, root: Path, query: str, version: st
             if status_callback:status_callback("downloading",file_status.copy())
         except Exception as exc:
             message=str(exc)
-            reason="file_too_large" if "file_too_large" in message else "unexpected_content_type" if "unexpected_content_type" in message else "invalid_file_signature" if "invalid_file_signature" in message else "download_failed"
+            reason=message[:180] if isinstance(exc,SourceError) else "file_too_large" if "file_too_large" in message else "unexpected_content_type" if "unexpected_content_type" in message else "invalid_file_signature" if "invalid_file_signature" in message else "download_failed"
             errors.append({"file":file.name,"reason":reason,"message":message[:180]})
             file_status.update(status="failed",reason=reason)
             if status_callback:status_callback("downloading",file_status.copy())
