@@ -6,7 +6,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 import httpx
 from bs4 import BeautifulSoup
 
-from ..config import DEBUG_SCRAPERS, DEBUG_DIR, HTTP_TIMEOUT_SECONDS, PLAYWRIGHT_ENABLED, REQUEST_DELAY_MS, BROWSER_AUTH_ENABLED, MAX_FILE_SIZE_MB, source_config
+from ..config import DEBUG_SCRAPERS, DEBUG_DIR, HTTP_TIMEOUT_SECONDS, PLAYWRIGHT_ENABLED, SCRAPLING_ENABLED, REQUEST_DELAY_MS, BROWSER_AUTH_ENABLED, MAX_FILE_SIZE_MB, source_config
 from ..models import DownloadableFile, ModelResult
 from ..utils.filenames import category_for
 from .errors import SourceError
@@ -104,6 +104,32 @@ class ModelSource(ABC):
                 raise SourceError(code,f"Browser page returned HTTP {status.group(1)}.","playwright_authenticated" if authenticated else "playwright_public") from exc
             raise SourceError("BROWSER_UNAVAILABLE", f"Browser fallback unavailable: {type(exc).__name__}.", "playwright_authenticated" if authenticated else "playwright_public") from exc
 
+    async def _scrapling_fetch(self, url: str, *, page_action=None, page_setup=None, cookies=None):
+        """Fetch a public page or file with Scrapling's stealth browser fallback."""
+        if not SCRAPLING_ENABLED:
+            raise SourceError("UNSUPPORTED", "Scrapling fallback is disabled.", "scrapling")
+        try:
+            from .scrapling_client import fetch
+            await self._respect_rate()
+            return await fetch(url, page_action=page_action, page_setup=page_setup, cookies=cookies)
+        except SourceError:
+            raise
+        except Exception as exc:
+            if "Download is starting" not in str(exc):
+                log.exception("Scrapling fetch failed for %s",urlparse(url)._replace(query="").geturl())
+            raise SourceError("SCRAPLING_ERROR", f"Scrapling fallback failed: {type(exc).__name__}.", "scrapling") from exc
+
+    async def _scrapling_html(self, url: str) -> str:
+        response = await self._scrapling_fetch(url)
+        if response.status != 200:
+            raise SourceError(f"HTTP_{response.status}", f"Scrapling returned HTTP {response.status}.", "scrapling")
+        html = response.text
+        visible=BeautifulSoup(html,"lxml").get_text(" ",strip=True)
+        if re.search(r"verify you are human|checking your browser|access denied", visible[:12000], re.I):
+            raise SourceError("BLOCKED", "The page presented an access challenge.", "scrapling")
+        self.last_method = "scrapling"
+        return html
+
     def save_debug(self, payload: str, suffix: str) -> None:
         if not DEBUG_SCRAPERS: return
         folder = DEBUG_DIR / self.key
@@ -154,6 +180,12 @@ class ModelSource(ABC):
             except SourceError as exc:
                 http_error=exc
                 if mode == "http": raise
+        if html is None and mode in {"auto","scrapling"} and SCRAPLING_ENABLED:
+            try:
+                html=await self._scrapling_html(model_url)
+            except SourceError as exc:
+                http_error=exc
+                if mode == "scrapling": raise
         if html is None:
             if mode == "browser" and PLAYWRIGHT_ENABLED: html=await self._browser_html(model_url)
             elif mode == "authenticated_browser" and PLAYWRIGHT_ENABLED: html=await self._browser_html(model_url,authenticated=True)
@@ -182,67 +214,150 @@ class ModelSource(ABC):
     async def get_downloads(self, model: ModelResult) -> list[DownloadableFile]:
         return model.available_files
 
+    async def _scrapling_download_file(self, file: DownloadableFile, destination: Path) -> tuple[str | None, int]:
+        """Use a solved Scrapling browser context to request and save a raw file."""
+        request_errors=[]
+
+        async def request_file(page):
+            try:
+                response=await page.context.request.get(file.url or "",timeout=int(HTTP_TIMEOUT_SECONDS*1000))
+                self.validate_download_url(response.url)
+                content_type=response.headers.get("content-type","").split(";",1)[0].lower()
+                if response.status!=200:
+                    raise ValueError(f"HTTP_{response.status}")
+                if "text/html" in content_type:
+                    raise ValueError("unexpected_content_type: Download URL returned HTML")
+                payload=await response.body()
+                if len(payload)>MAX_FILE_SIZE_MB*1024*1024:
+                    raise ValueError("file_too_large")
+                if not payload:
+                    raise ValueError("empty_download")
+                destination.write_bytes(payload)
+                file.mime_type=content_type or None
+                file.size_bytes=len(payload)
+            except Exception as exc:
+                request_errors.append(exc)
+
+        page_url=f"https://www.{self.domains[0]}"
+        try:
+            await self._scrapling_fetch(page_url,page_action=request_file)
+        except SourceError:
+            if not destination.exists():
+                raise
+        if destination.exists():
+            total=destination.stat().st_size
+            if total>MAX_FILE_SIZE_MB*1024*1024:
+                destination.unlink(missing_ok=True)
+                raise ValueError("file_too_large")
+            if total<=0:
+                destination.unlink(missing_ok=True)
+                raise ValueError("empty_download")
+            return file.mime_type or "application/octet-stream",total
+        if request_errors:
+            error=request_errors[-1]
+            if isinstance(error,ValueError):
+                raise error
+            raise SourceError("SCRAPLING_ERROR",f"Scrapling's browser request failed: {type(error).__name__}.","scrapling") from error
+        raise ValueError("Scrapling browser request did not produce a file")
+
     async def download_file(self, file: DownloadableFile, destination: Path):
         self.validate_download_url(file.url or "")
         await self._respect_rate()
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False,
-            headers={"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/134.0 Safari/537.36"}) as client:
-            async with client.stream("GET", file.url) as response:
-                response.raise_for_status()
-                content_type=response.headers.get("content-type", "").split(";",1)[0].lower()
-                if "text/html" in content_type: raise ValueError("unexpected_content_type: Download URL returned HTML")
-                file.mime_type=content_type or None
-                length=response.headers.get("content-length")
-                if length and int(length)>MAX_FILE_SIZE_MB*1024*1024: raise ValueError("file_too_large")
-                total=0
-                with destination.open("wb") as out:
-                    async for chunk in response.aiter_bytes():
-                        total+=len(chunk)
-                        if total>MAX_FILE_SIZE_MB*1024*1024:
-                            destination.unlink(missing_ok=True);raise ValueError("file_too_large")
-                        out.write(chunk)
-                if total==0: raise ValueError("empty_download")
-                file.size_bytes=total
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False,
+                headers={"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/134.0 Safari/537.36"}) as client:
+                async with client.stream("GET", file.url) as response:
+                    response.raise_for_status()
+                    content_type=response.headers.get("content-type", "").split(";",1)[0].lower()
+                    if "text/html" in content_type: raise ValueError("unexpected_content_type: Download URL returned HTML")
+                    file.mime_type=content_type or None
+                    length=response.headers.get("content-length")
+                    if length and int(length)>MAX_FILE_SIZE_MB*1024*1024: raise ValueError("file_too_large")
+                    total=0
+                    with destination.open("wb") as out:
+                        async for chunk in response.aiter_bytes():
+                            total+=len(chunk)
+                            if total>MAX_FILE_SIZE_MB*1024*1024:
+                                destination.unlink(missing_ok=True);raise ValueError("file_too_large")
+                            out.write(chunk)
+                    if total==0: raise ValueError("empty_download")
+                    file.size_bytes=total
+        except (httpx.HTTPError, ValueError) as original_error:
+            if "file_too_large" in str(original_error):
+                raise
+            # Retry browser-backed fetches for providers that challenge plain HTTP.
+            # Keep the provider-specific download-host allowlist on the final URL.
+            destination.unlink(missing_ok=True)
+            try:
+                content_type,total=await self._scrapling_download_file(file,destination)
+            except Exception:
+                destination.unlink(missing_ok=True)
+                if not SCRAPLING_ENABLED:
+                    raise original_error
+                raise
+            file.mime_type=content_type
+            file.size_bytes=total
         return destination
 
     async def download_browser_file(self, model_url: str, file: DownloadableFile, destination: Path):
         """Use the provider's normal browser download action when no direct URL is exposed."""
-        if not PLAYWRIGHT_ENABLED:
-            raise SourceError("UNSUPPORTED", "Browser downloads are disabled.", "browser_download")
-        authenticated = self.config["access_mode"] == "authenticated_browser" or BROWSER_AUTH_ENABLED
-        page = None
-        try:
-            from ..browser import BROWSER
-            page = await BROWSER.new_page(authenticated=authenticated)
-            response = await page.goto(model_url, wait_until="domcontentloaded", timeout=int(HTTP_TIMEOUT_SECONDS * 1000))
-            if response and response.status in {401, 403, 429}:
-                raise SourceError(f"HTTP_{response.status}", f"Browser page returned HTTP {response.status}.", "browser_download")
-            await page.wait_for_timeout(1200)
-            if re.search(r"captcha|verify you are human|checking your browser|access denied", await page.content(), re.I):
-                raise SourceError("BLOCKED", "The provider presented an access challenge.", "browser_download")
-            wanted = {file.extension.lower(), Path(file.name).suffix.lower()}
-            stem = Path(file.name).stem.lower()
-            candidates = page.locator("a, button")
-            for index in range(min(await candidates.count(), 120)):
-                candidate = candidates.nth(index)
-                text = (await candidate.inner_text()).strip().lower()
-                href = (await candidate.get_attribute("href") or "").lower()
-                haystack = f"{text} {href}"
-                if not (any(ext and ext in haystack for ext in wanted) or stem and stem in haystack or "download" in haystack):
-                    continue
-                try:
-                    async with page.expect_download(timeout=5000) as pending:
-                        await candidate.click(timeout=3000)
-                    download = await pending.value
-                    await download.save_as(str(destination))
-                    if destination.exists() and destination.stat().st_size:
-                        return destination
-                except Exception:
-                    continue
-            raise SourceError("DOWNLOAD_UNAVAILABLE", f"No browser download action was available for {file.name}.", "browser_download")
-        finally:
-            if page is not None:
-                await page.close()
+        if SCRAPLING_ENABLED:
+            wanted={file.extension.lower(),Path(file.name).suffix.lower()}-{""}
+            stem=Path(file.name).stem.lower()
+            self._scrapling_download_actions=[]
+
+            async def click_download(page):
+                selector="a, button, [role=button]"
+                for _ in range(3):
+                    candidates=page.locator(selector)
+                    actions=await candidates.evaluate_all(r"""nodes => nodes.slice(0, 200).map((el,index) => ({
+                        index,
+                        label: `${el.innerText || el.textContent || ''} ${el.getAttribute('href') || ''} ${el.getAttribute('aria-label') || ''}`
+                            .replace(/\s+/g, ' ').trim().slice(0, 240)
+                    }))""")
+                    opened_list=False
+                    self._scrapling_download_actions.extend(action["label"] for action in actions
+                        if re.search(r"download|file|\.stl|\.3mf",action["label"],re.I))
+                    list_action=next((item for item in actions if re.search(r"download\s+list|file\s+list",item["label"],re.I)),None)
+                    if list_action:
+                        await candidates.nth(list_action["index"]).click(timeout=3000)
+                        await page.wait_for_timeout(800)
+                        self._scrapling_download_page_text=(await page.locator("body").inner_text())[:3000]
+                        opened_list=True
+                    if opened_list:
+                        continue
+                    for action in actions:
+                        haystack=action["label"].lower()
+                        matches=bool(stem and stem in haystack) or any(ext in haystack for ext in wanted)
+                        if not (matches or ("download" in haystack and "list" not in haystack)):
+                            continue
+                        try:
+                            async with page.expect_download(timeout=4000) as pending:
+                                await candidates.nth(action["index"]).click(timeout=2500)
+                            download=await pending.value
+                            self.validate_download_url(download.url)
+                            await download.save_as(str(destination))
+                            if destination.exists() and destination.stat().st_size:
+                                return
+                        except Exception:
+                            continue
+                    if not opened_list:
+                        break
+
+            try:
+                await self._scrapling_fetch(model_url,page_action=click_download)
+                if destination.exists() and destination.stat().st_size:
+                    size=destination.stat().st_size
+                    if size>MAX_FILE_SIZE_MB*1024*1024:
+                        destination.unlink(missing_ok=True)
+                        raise ValueError("file_too_large")
+                    file.size_bytes=size
+                    self.last_method="scrapling_download"
+                    return destination
+            except Exception as exc:
+                destination.unlink(missing_ok=True)
+                log.info("%s Scrapling browser download failed for %s: %s",self.label,file.name,type(exc).__name__)
+        raise SourceError("DOWNLOAD_UNAVAILABLE",f"Scrapling did not expose a browser download for {file.name}.","scrapling")
 
     def parse_detail(self, html: str, url: str) -> ModelResult:
         soup = BeautifulSoup(html, "lxml")
