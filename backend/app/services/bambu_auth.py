@@ -12,13 +12,24 @@ TOKEN_FILE = BAMBU_TOKEN_FILE
 def _response_error(response: httpx.Response, action: str) -> str:
     """Describe rejected API responses without logging response bodies or secrets."""
     content_type = response.headers.get("content-type", "unknown").split(";", 1)[0]
-    if "html" in content_type.lower():
+    body = response.content.lstrip()
+    if "html" in content_type.lower() or body[:32].lower().startswith((b"<!doctype html", b"<html")):
         return (
             f"Bambu Cloud returned an HTML verification page while {action} "
             f"(HTTP {response.status_code}, {content_type}). The API request was "
             "challenged; this is not an invalid email code. Complete sign-in in "
             "Bambu's official app/site, then retry, or use a Bambu account with "
             "email-code login enabled."
+        )
+    if not body:
+        return (
+            f"Bambu Cloud returned an empty response while {action} "
+            f"(HTTP {response.status_code}, {content_type})."
+        )
+    if "json" not in content_type.lower():
+        return (
+            f"Bambu Cloud returned an unexpected non-JSON response while {action} "
+            f"(HTTP {response.status_code}, {content_type}, {len(body)} bytes)."
         )
     return f"Bambu Cloud rejected the request while {action} (HTTP {response.status_code}, {content_type})."
 
@@ -60,6 +71,11 @@ def request_email_code(email: str) -> None:
     )
     if response.is_error:
         raise RuntimeError(_response_error(response, "requesting a verification code"))
+    # The endpoint may acknowledge a successfully queued email with HTTP 200
+    # and an empty body. Treat that as accepted; requiring JSON here turns the
+    # success response into a misleading login failure.
+    if response.status_code in {200, 204} and not response.content.strip():
+        return
     try:
         result = response.json()
     except ValueError as exc:
