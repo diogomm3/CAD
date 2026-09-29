@@ -152,7 +152,10 @@ class PrintablesSource(HTMLSearchSource):
             ok output { link ttl } errors { field messages }
           }
         }"""
-        file_types={".stl":"stl", ".gcode":"gcode", ".bgcode":"gcode"}
+        # Printables stores 3MF projects in its `stls` collection too; the
+        # download mutation identifies that collection as `stl` regardless of
+        # the filename extension.
+        file_types={".stl":"stl", ".3mf":"stl", ".gcode":"gcode", ".bgcode":"gcode"}
         for file in model.available_files:
             file_type=file_types.get(file.extension.lower())
             file_id=file.provider_file_id
@@ -333,6 +336,15 @@ class MakerWorldSource(HTMLSearchSource):
         if file.provider_profile_id and file.url:
             return await self._download_signed_profile(file,destination)
         return await super().download_file(file,destination)
+
+    async def download_browser_file(self,model_url: str,file: DownloadableFile,destination: Path):
+        if not file.url and not load_bambu_token():
+            raise SourceError(
+                "AUTH_REQUIRED",
+                "MakerWorld returned file metadata but no public download URL. Sign in to Bambu Cloud to resolve a downloadable print profile.",
+                "api.bambulab.com",
+            )
+        return await super().download_browser_file(model_url,file,destination)
 
     def accept_url(self,url):return "/models/" in urlparse(url).path and bool(re.search(r"/\d+(?:-|$)",urlparse(url).path))
 
