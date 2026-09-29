@@ -14,6 +14,9 @@ class DownloadableFile(BaseModel):
     size_bytes: int | None = None
     sha256: str | None = None
     source_url: str | None = None
+    provider_file_id: str | None = None
+    provider_profile_id: str | None = None
+    provider_model_id: str | None = None
 
 
 class ModelResult(BaseModel):
