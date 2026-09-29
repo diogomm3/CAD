@@ -1,4 +1,5 @@
 import logging, re
+import asyncio
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse
 from bs4 import BeautifulSoup
@@ -7,7 +8,8 @@ from .base import ModelSource, canonical_url, _meta, _author_from_soup
 from .errors import SourceError
 from ..models import DownloadableFile, ModelResult
 from ..utils.filenames import category_for
-from ..config import BROWSER_AUTH_ENABLED, PLAYWRIGHT_ENABLED, source_config
+from ..config import BROWSER_AUTH_ENABLED, PLAYWRIGHT_ENABLED, SCRAPLING_ENABLED, source_config
+from ..services.bambu_auth import BAMBU_API, load_bambu_token
 
 log = logging.getLogger(__name__)
 
@@ -77,12 +79,15 @@ class HTMLSearchSource(ModelSource):
         if mode == "api": raise SourceError("UNSUPPORTED", f"{self.label} does not provide a configured API adapter.", "api")
         url=self.search_url.format(query=quote_plus(query)); errors=[]; attempts={}
         self.last_attempts=attempts
-        methods=("http","playwright_public","playwright_authenticated")
-        allowed={"auto":methods,"http":("http",),"browser":("playwright_public",),"authenticated_browser":("playwright_authenticated",)}.get(mode,())
+        methods=("http","scrapling","playwright_public","playwright_authenticated")
+        allowed={"auto":methods,"http":("http",),"scrapling":("scrapling",),"browser":("playwright_public",),"authenticated_browser":("playwright_authenticated",)}.get(mode,())
         for method in methods:
             if method not in allowed:
                 attempts[method]="not configured";continue
-            if method!="http" and not PLAYWRIGHT_ENABLED:
+            if method=="scrapling" and not SCRAPLING_ENABLED:
+                attempts[method]="Scrapling is disabled"
+                continue
+            if method.startswith("playwright_") and not PLAYWRIGHT_ENABLED:
                 attempts[method]="Playwright is disabled"
                 if mode!="auto":errors.append(SourceError("UNSUPPORTED","Playwright is disabled.",method))
                 continue
@@ -90,6 +95,7 @@ class HTMLSearchSource(ModelSource):
                 attempts[method]="not configured (set BROWSER_AUTH_ENABLED=true after manual login)";continue
             try:
                 if method=="http": html=await self._get(url);self.last_method="http"
+                elif method=="scrapling": html=await self._scrapling_html(url)
                 else: html=await self._browser_html(url,authenticated=method=="playwright_authenticated")
                 results=self._candidate_models(html,limit)
                 if results:
@@ -108,7 +114,7 @@ class HTMLSearchSource(ModelSource):
         raise SourceError("UNSUPPORTED", "No access method is enabled for this source.")
 
 class PrintablesSource(HTMLSearchSource):
-    key="printables";label="Printables";domains=("printables.com",);download_domains=("media.printables.com",);search_method="graphql"
+    key="printables";label="Printables";domains=("printables.com",);download_domains=("media.printables.com","files.printables.com");search_method="graphql"
     search_url="https://www.printables.com/search/models?q={query}&o=popular"
     def accept_url(self,url):return bool(re.search(r"/model/\d+",urlparse(url).path))
 
@@ -126,12 +132,81 @@ class PrintablesSource(HTMLSearchSource):
             files=[]
             for item_file in item.get("stls") or []:
                 name=item_file.get("name") or f"{item_file.get('id','model')}.stl"
-                files.append(DownloadableFile(name=name,extension=Path(name).suffix.lower() or ".stl",category=category_for(name),size_bytes=item_file.get("fileSize"),downloadable=False,reason="Printables requires the normal browser download action."))
+                files.append(DownloadableFile(name=name,extension=Path(name).suffix.lower() or ".stl",category=category_for(name),size_bytes=item_file.get("fileSize"),downloadable=False,reason="Resolving Printables download URL.",provider_file_id=str(item_file.get("id") or "") or None))
             image_path=(item.get("image") or {}).get("filePath")
             image=f"https://media.printables.com/{image_path.lstrip('/')}" if image_path else None
             return ModelResult(id=match.group(1),source=self.key,title=item.get("name") or match.group(1),author=(item.get("user") or {}).get("publicUsername"),model_url=model_url,thumbnail_url=image,image_urls=[image] if image else [],available_files=files,raw_metadata={"graphql":True})
-        except SourceError:
-            raise
+        except SourceError as exc:
+            if not SCRAPLING_ENABLED:
+                raise
+            log.info("Printables GraphQL details failed (%s); retrying page with Scrapling", exc.code)
+            return await ModelSource.get_model_details(self, model_url)
+
+    async def get_downloads(self, model: ModelResult) -> list[DownloadableFile]:
+        """Resolve Printables' file IDs to short-lived CDN URLs through GraphQL."""
+        match=re.search(r"/model/(\d+)",urlparse(model.model_url).path)
+        if not match:
+            return model.available_files
+        mutation="""mutation GetDownloadLink($id: ID!, $modelId: ID!, $fileType: DownloadFileTypeEnum!, $source: DownloadSourceEnum!) {
+          getDownloadLink(id: $id, printId: $modelId, fileType: $fileType, source: $source) {
+            ok output { link ttl } errors { field messages }
+          }
+        }"""
+        file_types={".stl":"stl", ".gcode":"gcode", ".bgcode":"gcode"}
+        for file in model.available_files:
+            file_type=file_types.get(file.extension.lower())
+            file_id=file.provider_file_id
+            if not file_type or not file_id:
+                continue
+            try:
+                payload=await self._graphql_with_profile(mutation,{"id":str(file_id),"modelId":match.group(1),"fileType":file_type,"source":"model_detail"})
+                result=(payload.get("data") or {}).get("getDownloadLink") or {}
+                url=(result.get("output") or {}).get("link") if result.get("ok") else None
+                if url:
+                    self.validate_download_url(url)
+                    file.url=url
+                    file.downloadable=True
+                    file.reason=None
+            except (SourceError, ValueError) as exc:
+                file.reason=str(exc)
+                log.info("Printables download URL unavailable for %s: %s",file.name,exc)
+        return model.available_files
+
+    async def _graphql_with_profile(self, query: str, variables: dict) -> dict:
+        """Use cookies from the user's persistent browser profile for gated downloads."""
+        from ..browser import BROWSER
+
+        context=await BROWSER.context()
+        cookies=await context.cookies(["https://www.printables.com", "https://api.printables.com"])
+        cookie_header="; ".join(f"{cookie['name']}={cookie['value']}" for cookie in cookies
+            if cookie.get("domain", "").lstrip(".").endswith("printables.com"))
+        await self._respect_rate()
+        headers={
+            "Content-Type":"application/json", "Origin":"https://www.printables.com",
+            "Referer":"https://www.printables.com/",
+            "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/134.0 Safari/537.36",
+        }
+        if cookie_header:
+            headers["Cookie"]=cookie_header
+        try:
+            async with httpx.AsyncClient(timeout=20,follow_redirects=True) as client:
+                response=await client.post("https://api.printables.com/graphql/",json={"query":query,"variables":variables},headers=headers)
+        except httpx.TimeoutException as exc:
+            raise SourceError("TIMEOUT","The Printables download-link request timed out.","graphql_authenticated") from exc
+        except httpx.RequestError as exc:
+            raise SourceError("NETWORK_ERROR",f"The Printables download-link endpoint could not be reached: {type(exc).__name__}.","graphql_authenticated") from exc
+        if response.status_code in {401,403,429}:
+            message={401:"Sign in to Printables in the saved browser profile to download this model.",403:"Printables rejected the download-link request. Check that the saved browser profile is signed in.",429:"Printables rate limit reached."}[response.status_code]
+            raise SourceError(f"HTTP_{response.status_code}",message,"graphql_authenticated")
+        try:
+            response.raise_for_status()
+            payload=response.json()
+        except (httpx.HTTPStatusError,ValueError) as exc:
+            raise SourceError("PARSE_ERROR","Printables returned an invalid download-link response.","graphql_authenticated") from exc
+        if payload.get("errors"):
+            message=str(payload["errors"][0].get("message") or "download-link request failed")
+            raise SourceError("AUTH_REQUIRED",f"Printables could not authorize the download: {message}","graphql_authenticated")
+        return payload
 
     async def _graphql(self, query: str, variables: dict) -> dict:
         """Request public listing metadata through Printables' GraphQL endpoint."""
@@ -165,7 +240,13 @@ class PrintablesSource(HTMLSearchSource):
             items { id name slug likesCount downloadCount ratingAvg image { filePath } user { publicUsername } }
           }
         }"""
-        payload=await self._graphql(gql,{"query":query,"limit":limit})
+        try:
+            payload=await self._graphql(gql,{"query":query,"limit":limit})
+        except SourceError as exc:
+            if not SCRAPLING_ENABLED:
+                raise
+            log.info("Printables GraphQL search failed (%s); retrying page with Scrapling", exc.code)
+            return await HTMLSearchSource.search(self, query, limit)
         items=payload.get("data",{}).get("result",{}).get("items",[])
         if not isinstance(items,list): raise SourceError("PARSE_ERROR","Printables GraphQL response did not include model results.","graphql")
         models=[]
@@ -189,7 +270,140 @@ class PrintablesSource(HTMLSearchSource):
 class MakerWorldSource(HTMLSearchSource):
     key="makerworld";label="MakerWorld";domains=("makerworld.com",);download_domains=("makerworld.bblmw.com",);search_method="api.bambulab.com"
     search_url="https://makerworld.com/en/search/models?keyword={query}&orderBy=6"
+    def __init__(self):
+        self._files_by_model_id={}
+        self._profiles_by_model_id={}
+
+    @staticmethod
+    def _auth_headers():
+        token=load_bambu_token()
+        return {"Authorization":f"Bearer {token}"} if token else None
+
+    def validate_download_url(self,url: str):
+        parsed=urlparse(url)
+        host=(parsed.hostname or "").lower()
+        s3_host=host.endswith(".amazonaws.com") and (host.startswith("s3.") or ".s3." in host)
+        if parsed.scheme!="https" or not host or not (self._host_allowed(host,self.domains+self.download_domains) or host=="model-file.bambulab.com" or s3_host):
+            raise ValueError("URL is not an HTTPS MakerWorld download URL")
+
+    async def _download_signed_profile(self,file: DownloadableFile,destination: Path):
+        """Stream a short-lived signed Bambu URL without normalizing its signature query."""
+        from urllib.error import HTTPError
+        from urllib.request import HTTPRedirectHandler, Request, build_opener
+        from ..config import HTTP_TIMEOUT_SECONDS, MAX_FILE_SIZE_MB
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs):return None
+
+        def fetch():
+            self.validate_download_url(file.url or "")
+            request=Request(file.url,headers={"User-Agent":"LocalModelFinder/1.0"})
+            opener=build_opener(NoRedirect())
+            total=0;limit=int(MAX_FILE_SIZE_MB*1024*1024)
+            try:
+                with opener.open(request,timeout=HTTP_TIMEOUT_SECONDS) as response:
+                    content_type=response.headers.get("content-type","").split(";",1)[0].lower()
+                    if "text/html" in content_type:raise ValueError("unexpected_content_type: MakerWorld returned HTML")
+                    length=response.headers.get("content-length")
+                    if length and int(length)>limit:raise ValueError("file_too_large")
+                    with destination.open("wb") as out:
+                        while True:
+                            chunk=response.read(1024*1024)
+                            if not chunk:break
+                            total+=len(chunk)
+                            if total>limit:raise ValueError("file_too_large")
+                            out.write(chunk)
+                if total<=0:raise ValueError("empty_download")
+                return content_type,total
+            except HTTPError as exc:
+                raise ValueError(f"MakerWorld signed download returned HTTP {exc.code}") from exc
+        try:
+            content_type,total=await asyncio.to_thread(fetch)
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            if not SCRAPLING_ENABLED:
+                raise
+            log.info("MakerWorld signed profile stream failed; retrying with Scrapling: %s", type(exc).__name__)
+            return await super().download_file(file,destination)
+        file.mime_type=content_type or None
+        file.size_bytes=total
+        return destination
+
+    async def download_file(self,file: DownloadableFile,destination: Path):
+        if file.provider_profile_id and file.url:
+            return await self._download_signed_profile(file,destination)
+        return await super().download_file(file,destination)
+
     def accept_url(self,url):return "/models/" in urlparse(url).path and bool(re.search(r"/\d+(?:-|$)",urlparse(url).path))
+
+    async def get_model_details(self, model_url: str) -> ModelResult:
+        """Use MakerWorld's public Bambu Cloud metadata API, not its 403-prone web page."""
+        self.ensure_enabled()
+        self.validate_url(model_url)
+        match=re.search(r"/models/(\d+)",urlparse(model_url).path)
+        if not match:
+            return await super().get_model_details(model_url)
+        try:
+            response=await self._get_response(f"{BAMBU_API}/v1/design-service/design/{match.group(1)}",headers=self._auth_headers())
+        except SourceError as exc:
+            if not SCRAPLING_ENABLED:
+                raise
+            log.info("MakerWorld detail API failed (%s); retrying page with Scrapling",exc.code)
+            return await ModelSource.get_model_details(self,model_url)
+        try:
+            item=response.json()
+        except ValueError as exc:
+            raise SourceError("PARSE_ERROR","MakerWorld's design API returned invalid JSON.","api.bambulab.com") from exc
+        creator=item.get("designCreator") or {}
+        cover=item.get("coverUrl")
+        model_id=item.get("modelId")
+        instances=item.get("instances") or []
+        self._profiles_by_model_id[match.group(1)]={"model_id":model_id,"instances":instances}
+        self.last_method="api.bambulab.com"
+        return ModelResult(
+            id=match.group(1),source=self.key,title=item.get("title") or match.group(1),
+            author=creator.get("name"),model_url=model_url,thumbnail_url=cover,
+            image_urls=[cover] if cover else [],downloads=item.get("downloadCount"),
+            likes=item.get("likeCount"),description=item.get("summary"),license=item.get("license"),
+            available_files=self._files_by_model_id.get(match.group(1),[]),
+            raw_metadata={"api":"api.bambulab.com","model_id":model_id},
+        )
+
+    async def get_downloads(self,model: ModelResult) -> list[DownloadableFile]:
+        """Use authorized direct file URLs when present; otherwise offer a signed profile 3MF."""
+        token=load_bambu_token()
+        if not token:
+            return model.available_files
+        direct_files=[file for file in model.available_files if file.downloadable and file.url]
+        if direct_files:
+            return direct_files
+        cached=self._profiles_by_model_id.get(model.id) or {}
+        internal_id=cached.get("model_id") or (model.raw_metadata or {}).get("model_id")
+        instances=cached.get("instances") or []
+        if not internal_id or not instances:
+            return model.available_files
+        instance=next((entry for entry in instances if entry.get("isDefault")),instances[0])
+        profile_id=instance.get("profileId")
+        if not profile_id:
+            return model.available_files
+        url=f"{BAMBU_API}/v1/iot-service/api/user/profile/{profile_id}"
+        try:
+            response=await self._get_response(url,params={"model_id":str(internal_id)},headers={"Authorization":f"Bearer {token}"})
+            payload=response.json()
+            signed_url=payload.get("url")
+            if not signed_url:
+                return model.available_files
+            self.validate_download_url(signed_url)
+            profile_name=instance.get("title") or "Default print profile"
+            filename=f"{model.title} - {profile_name}.3mf"
+            profile_file=DownloadableFile(name=filename,extension=".3mf",category="3MF",url=signed_url,
+                downloadable=True,reason=None,size_bytes=None,provider_profile_id=str(profile_id),provider_model_id=str(internal_id))
+            # MakerWorld's raw files remain login-gated through its challenged page.
+            # Prefer a verified profile package instead of reporting every raw part as failed.
+            return [profile_file]
+        except (SourceError,ValueError,KeyError) as exc:
+            log.info("MakerWorld profile download URL unavailable for %s: %s",model.id,exc)
+            return model.available_files
 
     async def search(self, query: str, limit: int = 12) -> list[ModelResult]:
         """Search MakerWorld's public listing endpoint without loading its web page."""
@@ -200,10 +414,14 @@ class MakerWorldSource(HTMLSearchSource):
             response=await self._get_response(
                 "https://api.bambulab.com/v1/search-service/select/design2",
                 params={"keyword":query,"limit":limit,"orderBy":6},
+                headers=self._auth_headers(),
             )
             payload=response.json()
-        except SourceError:
-            raise
+        except SourceError as exc:
+            if not SCRAPLING_ENABLED:
+                raise
+            log.info("MakerWorld search API failed (%s); retrying page with Scrapling", exc.code)
+            return await HTMLSearchSource.search(self, query, limit)
         except ValueError as exc:
             raise SourceError("PARSE_ERROR","MakerWorld's listing endpoint returned invalid JSON.",method) from exc
 
@@ -227,9 +445,18 @@ class MakerWorldSource(HTMLSearchSource):
                 if not name:
                     continue
                 extension=Path(name).suffix.lower() or f".{str(file.get('modelType') or 'file').lower()}"
+                direct_url=str(file.get("modelUrl") or "")
+                downloadable=False
+                reason="MakerWorld's public response did not include a raw file URL."
+                if direct_url:
+                    try:
+                        self.validate_download_url(direct_url)
+                        downloadable=True;reason=None
+                    except ValueError:
+                        direct_url=""
                 files.append(DownloadableFile(
                     name=name, extension=extension, category=category_for(name), size_bytes=file.get("modelSize"),
-                    downloadable=False, reason="MakerWorld did not provide a public direct download URL.",
+                    url=direct_url or None,downloadable=downloadable,reason=reason,
                 ))
             pictures=(item.get("designExtension") or {}).get("design_pictures") or []
             image_urls=[picture.get("url") for picture in pictures if isinstance(picture,dict) and picture.get("url")]
@@ -247,6 +474,7 @@ class MakerWorldSource(HTMLSearchSource):
                 available_files=files, license=item.get("license"),
                 raw_metadata={"ranking_position":index,"api":"api.bambulab.com"},
             ))
+            self._files_by_model_id[model_id]=models[-1].available_files
         models.sort(key=_popularity_key,reverse=True)
         self.last_attempts={method:f"success ({len(models)} results)"};self.last_status="success_empty" if not models else "success";self.last_message=None
         self.last_parse_diagnostics={"results_discovered":len(items),"accepted":len(models),"missing_fields":self._missing(models)}
