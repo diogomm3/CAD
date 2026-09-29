@@ -3,6 +3,7 @@ import pytest
 from app.scrapers.adapters import PrintablesSource, MakerWorldSource
 from app.scrapers.base import canonical_url
 from app.scrapers.errors import SourceError
+from app.models import DownloadableFile, ModelResult
 from app.config import SOURCE_CONFIG
 
 FIXTURES=Path(__file__).parent/"fixtures"
@@ -65,6 +66,24 @@ async def test_printables_graphql_search_normalizes_result_cards(monkeypatch):
     assert results[0].downloads==934 and results[0].author=="PurpxHaze91"
 
 @pytest.mark.asyncio
+async def test_printables_resolves_3mf_using_its_stl_collection(monkeypatch):
+    adapter=PrintablesSource()
+    model=ModelResult(id="447061",source="printables",title="Thor hammer",
+        model_url="https://www.printables.com/model/447061-thor-hammer",
+        available_files=[DownloadableFile(name="head.3mf",extension=".3mf",category="3MF",
+            downloadable=False,reason="Resolving Printables download URL.",provider_file_id="9981")])
+    async def link(query,variables):
+        assert variables=={"id":"9981","modelId":"447061","fileType":"stl","source":"model_detail"}
+        return {"data":{"getDownloadLink":{"ok":True,"output":{"link":"https://files.printables.com/head.3mf?token=fixture"}}}}
+    monkeypatch.setattr(adapter,"_graphql_with_profile",link)
+
+    files=await adapter.get_downloads(model)
+
+    assert files[0].downloadable is True
+    assert files[0].url=="https://files.printables.com/head.3mf?token=fixture"
+    assert files[0].reason is None
+
+@pytest.mark.asyncio
 async def test_makerworld_api_search_normalizes_cards_and_file_metadata(monkeypatch):
     adapter=MakerWorldSource()
     class Response:
@@ -82,6 +101,17 @@ async def test_makerworld_api_search_normalizes_cards_and_file_metadata(monkeypa
     assert model.author=="sWc Creation" and model.downloads==5334 and model.license=="CC0"
     assert model.image_urls==["https://makerworld.bblmw.com/cover.jpg","https://makerworld.bblmw.com/second.jpg"]
     assert [(file.name,file.category,file.downloadable) for file in model.available_files]==[("body.stl","STL",False),("plate.3mf","3MF",False)]
+
+@pytest.mark.asyncio
+async def test_makerworld_without_public_file_url_reports_auth_requirement(monkeypatch,tmp_path):
+    source=MakerWorldSource()
+    monkeypatch.setattr("app.scrapers.adapters.load_bambu_token",lambda:None)
+    file=DownloadableFile(name="model.stl",extension=".stl",category="STL",downloadable=False)
+
+    with pytest.raises(SourceError,match="no public download URL") as error:
+        await source.download_browser_file("https://makerworld.com/en/models/42372-thor-hammer",file,tmp_path/"model.stl")
+
+    assert error.value.code=="AUTH_REQUIRED"
 
 def test_canonical_url_removes_tracking_and_keeps_identity_query():
     assert canonical_url("/model/42?variant=3&utm_source=mail","https://www.printables.com/search") == "https://www.printables.com/model/42?variant=3"
